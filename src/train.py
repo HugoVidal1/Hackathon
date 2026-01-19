@@ -13,8 +13,9 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
+import json
 
-from models import EmbeddingModel, LinearClassifierHead
+from models import EmbeddingModel, LSTMEmbeddingModel, LinearClassifierHead
 from utils import (
     compute_per_patient_auc,
     aggregate_patient_aucs,
@@ -196,8 +197,11 @@ def train_lopo(
     labels: np.ndarray,
     patient_ids: np.ndarray,
     recording_ids: np.ndarray,
+    model_type: str = "feedforward",
     embedding_dim: int = 64,
     hidden_dims: list = [256, 128],
+    lstm_hidden_dim: int = 128,
+    num_lstm_layers: int = 2,
     batch_size: int = 128,
     num_epochs: int = 50,
     learning_rate: float = 0.001,
@@ -216,10 +220,16 @@ def train_lopo(
         Patient identifiers.
     recording_ids : np.ndarray
         Recording identifiers.
+    model_type : str, default="feedforward"
+        Type of model: "feedforward" or "lstm".
     embedding_dim : int, default=64
         Dimension of learned embeddings.
     hidden_dims : list, default=[256, 128]
-        Hidden layer dimensions.
+        Hidden layer dimensions (for feedforward model).
+    lstm_hidden_dim : int, default=128
+        LSTM hidden dimension (for LSTM model).
+    num_lstm_layers : int, default=2
+        Number of LSTM layers (for LSTM model).
     batch_size : int, default=128
         Batch size for training.
     num_epochs : int, default=50
@@ -281,9 +291,20 @@ def train_lopo(
 
         # Initialize model and classifier
         input_dim = features.shape[1]
-        model = EmbeddingModel(
-            input_dim=input_dim, embedding_dim=embedding_dim, hidden_dims=hidden_dims
-        ).to(device)
+        
+        if model_type == "lstm":
+            model = LSTMEmbeddingModel(
+                input_dim=input_dim,
+                embedding_dim=embedding_dim,
+                lstm_hidden_dim=lstm_hidden_dim,
+                num_lstm_layers=num_lstm_layers,
+            ).to(device)
+        else:  # feedforward
+            model = EmbeddingModel(
+                input_dim=input_dim,
+                embedding_dim=embedding_dim,
+                hidden_dims=hidden_dims,
+            ).to(device)
 
         classifier = LinearClassifierHead(
             embedding_dim=embedding_dim, num_classes=2
@@ -386,7 +407,7 @@ def main():
     config = get_config()
     config.print_config()
 
-    DEVICE = "cuda" if (torch.cuda.is_available() and config.use_cuda) else "cpu"
+    DEVICE = "cuda" if (torch.cuda.is_available() and config.use_cuda) else ("mps" if torch.backends.mps.is_available() else "cpu")
     print(f"Using device: {DEVICE}")
 
     # Load data
@@ -400,8 +421,11 @@ def main():
         labels=labels,
         patient_ids=patient_ids,
         recording_ids=recording_ids,
+        model_type=config.model_type,
         embedding_dim=config.embedding_dim,
         hidden_dims=config.hidden_dims,
+        lstm_hidden_dim=config.lstm_hidden_dim,
+        num_lstm_layers=config.num_lstm_layers,
         batch_size=config.batch_size,
         num_epochs=config.num_epochs,
         learning_rate=config.learning_rate,
@@ -411,6 +435,16 @@ def main():
     print("\nTraining complete!")
     print(f"Final Mean ROC AUC: {results['mean_auc']:.4f} ± {results['std_auc']:.4f}")
     print("Embedding visualization saved to: embeddings_visualization.png")
+
+    # Save model performance metrics
+    performance_metrics = {
+        "mean_auc": float(results["mean_auc"]),
+        "std_auc": float(results["std_auc"]),
+        "per_patient_auc": {str(k): float(v) if v is not None else None for k, v in results["per_patient_auc"].items()},
+    }
+    with open("model_performance.json", "w") as f:
+        json.dump(performance_metrics, f, indent=2)
+    print("Model performance saved to: model_performance.json")
 
 
 if __name__ == "__main__":
