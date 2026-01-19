@@ -80,6 +80,90 @@ class EmbeddingModel(nn.Module):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
 
+class LSTMEmbeddingModel(nn.Module):
+    """
+    LSTM-based model for learning voice embeddings.
+    Processes acoustic features as temporal sequences to capture sequential patterns.
+
+    Parameters
+    ----------
+    input_dim : int
+        Dimension of input acoustic features.
+    embedding_dim : int, default=64
+        Dimension of the learned embedding space.
+    lstm_hidden_dim : int, default=128
+        Hidden dimension for LSTM layers.
+    num_lstm_layers : int, default=2
+        Number of LSTM layers.
+    dropout : float, default=0.3
+        Dropout probability for regularization.
+    """
+
+    def __init__(
+        self,
+        input_dim: int,
+        embedding_dim: int = 64,
+        lstm_hidden_dim: int = 128,
+        num_lstm_layers: int = 2,
+        dropout: float = 0.3,
+    ):
+        super(LSTMEmbeddingModel, self).__init__()
+
+        self.input_dim = input_dim
+        self.embedding_dim = embedding_dim
+        self.lstm_hidden_dim = lstm_hidden_dim
+
+        # LSTM layers: treat each feature dimension as a time step
+        self.lstm = nn.LSTM(
+            input_size=1,
+            hidden_size=lstm_hidden_dim,
+            num_layers=num_lstm_layers,
+            batch_first=True,
+            dropout=dropout if num_lstm_layers > 1 else 0.0,
+        )
+
+        # Dense layers after LSTM to project to embedding space
+        self.fc = nn.Sequential(
+            nn.Linear(lstm_hidden_dim, 256),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(256, embedding_dim),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass to compute embeddings.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Input tensor of shape (batch_size, input_dim).
+
+        Returns
+        -------
+        embeddings : torch.Tensor
+            Embedding tensor of shape (batch_size, embedding_dim).
+        """
+        # Reshape input to (batch_size, seq_len=input_dim, feature_size=1)
+        # This treats each feature dimension as a time step
+        x = x.unsqueeze(-1)  # (batch_size, input_dim, 1)
+
+        # Pass through LSTM
+        lstm_out, (hidden, cell) = self.lstm(x)
+
+        # Use the last hidden state
+        last_hidden = hidden[-1]  # (batch_size, lstm_hidden_dim)
+
+        # Project to embedding space
+        embeddings = self.fc(last_hidden)
+
+        return embeddings
+
+    def get_num_parameters(self) -> int:
+        """Return the total number of trainable parameters."""
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+
 class LinearClassifierHead(nn.Module):
     """
     Simple linear classifier head.
