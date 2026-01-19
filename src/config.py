@@ -24,6 +24,10 @@ class Config(BaseModel):
     )
 
     # Model architecture
+    model_type: str = Field(
+        default="feedforward",
+        description="Type of model to use: 'feedforward' or 'lstm'",
+    )
     embedding_dim: int = Field(
         default=64,
         gt=0,
@@ -31,7 +35,17 @@ class Config(BaseModel):
     )
     hidden_dims: List[int] = Field(
         default=[256, 128],
-        description="Hidden layer dimensions (can add more layers)",
+        description="Hidden layer dimensions for feedforward model",
+    )
+    lstm_hidden_dim: int = Field(
+        default=128,
+        gt=0,
+        description="Hidden dimension for LSTM layers (LSTM model only)",
+    )
+    num_lstm_layers: int = Field(
+        default=2,
+        gt=0,
+        description="Number of LSTM layers (LSTM model only)",
     )
     dropout: float = Field(
         default=0.3,
