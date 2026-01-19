@@ -201,6 +201,7 @@ def train_lopo(
     batch_size: int = 128,
     num_epochs: int = 50,
     learning_rate: float = 0.001,
+    criterion: nn.Module = nn.CrossEntropyLoss(),
     device: str = "cpu",
 ):
     """
@@ -226,6 +227,8 @@ def train_lopo(
         Number of training epochs per fold.
     learning_rate : float, default=0.001
         Learning rate for optimizer.
+    criterion : nn.Module, default=nn.CrossEntropyLoss()
+        Loss function.
     device : str, default='cpu'
         Device to use ('cpu' or 'cuda').
 
@@ -292,7 +295,6 @@ def train_lopo(
         print(f"Model parameters: {model.get_num_parameters():,}")
 
         # Setup training
-        criterion = nn.CrossEntropyLoss()
         optimizer = optim.Adam(
             list(model.parameters()) + list(classifier.parameters()), lr=learning_rate
         )
