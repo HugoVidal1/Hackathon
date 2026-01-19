@@ -25,8 +25,8 @@ class ConstrativeLoss(nn.Module):
             self,
             logits: torch.Tensor,
             labels: torch.Tensor,
-            n_positives: int = 4,
-            n_negatives: int = 4,
+            n_positives: int = 2,
+            n_negatives: int = 2,
             margin: float = 1.0
         ) -> torch.Tensor:
         """

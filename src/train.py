@@ -103,7 +103,22 @@ def load_data(data_path: str):
     feature_cols = [col for col in df.columns if col not in metadata_cols]
 
     # Extract features, labels, patient IDs, and recording IDs
-    features = df[feature_cols].values.astype(np.float32)
+    df_features = df[feature_cols].copy()
+
+    # Convert datetime columns to numeric to avoid float(Timestamp) errors
+    datetime_cols = df_features.select_dtypes(include=["datetime64[ns]", "datetimetz"]).columns.tolist()
+    if datetime_cols:
+        print(f"Converting datetime columns to int64 (ns): {datetime_cols}")
+        df_features[datetime_cols] = df_features[datetime_cols].astype("int64")
+
+    # Drop any remaining non-numeric columns that cannot be converted
+    non_numeric_cols = df_features.select_dtypes(exclude=[np.number]).columns.tolist()
+    if non_numeric_cols:
+        print(f"Dropping non-numeric feature columns: {non_numeric_cols}")
+        df_features = df_features.drop(columns=non_numeric_cols)
+        feature_cols = [col for col in feature_cols if col not in non_numeric_cols]
+
+    features = df_features.values.astype(np.float32)
     labels = df["label"].values.astype(np.int64)
     patient_ids = df["patient_short_id"].values
     recording_ids = df["recording_id"].values
@@ -375,9 +390,8 @@ def train_lopo(
         all_test_labels,
         all_test_patient_ids,
         title=f"Learned Embeddings (LOPO) - Mean AUC: {mean_auc:.4f}",
-        save_path="embeddings_visualization.png",
+        save_path=f"embeddings_visualization_{current_time}.png"
     )
-    plt.savefig(f"embeddings_visualization_{current_time}.png")
     plt.show()
 
     return {
@@ -400,7 +414,7 @@ def main(args):
 
     # Load data
     features, labels, patient_ids, recording_ids, feature_names = load_data(
-        config.data_path
+        args.data_path
     )
 
     # Get loss function
@@ -433,6 +447,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train voice model with LOPO cross-validation")
     
     # Get arguments
+    parser.add_argument("--data_path", type=str, default="data/dataset.parquet",
+                        help="Path to the dataset parquet file")
     parser.add_argument("--loss", type=str, default="cross_entropy",
                         choices=["cross_entropy", "contrastive"],
                         help="Loss function to use for training")
