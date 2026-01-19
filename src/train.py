@@ -13,6 +13,8 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
+from datetime import datetime
+import argparse
 
 from models import EmbeddingModel, LinearClassifierHead
 from utils import (
@@ -23,6 +25,7 @@ from utils import (
     compute_random_baseline,
 )
 from config import get_config
+from losses import ConstrativeLoss
 
 
 # Set random seeds for reproducibility
@@ -122,7 +125,7 @@ def train_epoch(model, classifier, train_loader, criterion, optimizer, device):
     classifier.train()
 
     total_loss = 0.0
-    for features, labels, _, _ in train_loader:  # Added recording_id to unpack
+    for i, (features, labels, _, _) in enumerate(train_loader):  # Added recording_id to unpack
         features = features.to(device)
         labels = labels.to(device)
 
@@ -137,6 +140,8 @@ def train_epoch(model, classifier, train_loader, criterion, optimizer, device):
         optimizer.step()
 
         total_loss += loss.item() * features.size(0)
+
+        print(f"Batch number {i}/{len(train_loader)}")
 
     return total_loss / len(train_loader.dataset)
 
@@ -230,13 +235,15 @@ def train_lopo(
     criterion : nn.Module, default=nn.CrossEntropyLoss()
         Loss function.
     device : str, default='cpu'
-        Device to use ('cpu' or 'cuda').
+        Device to use ('cpu', 'mps' or 'cuda').
 
     Returns
     -------
     all_results : dict
         Dictionary containing results for all folds.
     """
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
     unique_patients = np.unique(patient_ids)
     print(f"\nStarting LOPO cross-validation with {len(unique_patients)} folds...\n")
 
@@ -370,6 +377,7 @@ def train_lopo(
         title=f"Learned Embeddings (LOPO) - Mean AUC: {mean_auc:.4f}",
         save_path="embeddings_visualization.png",
     )
+    plt.savefig(f"embeddings_visualization_{current_time}.png")
     plt.show()
 
     return {
@@ -382,13 +390,12 @@ def train_lopo(
     }
 
 
-def main():
+def main(args):
     """Main training function."""
     # Load configuration from config.py
     config = get_config()
     config.print_config()
-
-    DEVICE = "cuda" if (torch.cuda.is_available() and config.use_cuda) else "cpu"
+    DEVICE =  "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
     print(f"Using device: {DEVICE}")
 
     # Load data
@@ -396,17 +403,24 @@ def main():
         config.data_path
     )
 
+    # Get loss function
+    if args.loss == "cross_entropy":
+        criterion = nn.CrossEntropyLoss()
+    elif args.loss == "contrastive":
+        criterion = ConstrativeLoss(margin=1.0)
+
     # Train with LOPO
     results = train_lopo(
         features=features,
         labels=labels,
         patient_ids=patient_ids,
         recording_ids=recording_ids,
-        embedding_dim=config.embedding_dim,
-        hidden_dims=config.hidden_dims,
-        batch_size=config.batch_size,
-        num_epochs=config.num_epochs,
-        learning_rate=config.learning_rate,
+        embedding_dim=args.embedding_dim,
+        hidden_dims=args.hidden_dims,
+        batch_size=args.batch_size,
+        num_epochs=args.num_epochs,
+        learning_rate=args.learning_rate,
+        criterion=criterion,
         device=DEVICE,
     )
 
@@ -416,4 +430,24 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Train voice model with LOPO cross-validation")
+    
+    # Get arguments
+    parser.add_argument("--loss", type=str, default="cross_entropy",
+                        choices=["cross_entropy", "contrastive"],
+                        help="Loss function to use for training")
+    parser.add_argument("--embedding_dim", type=int, default=64,
+                        help="Dimension of the learned embeddings")
+    parser.add_argument("--hidden_dims", type=int, nargs='+', default=[256, 128],
+                        help="Hidden layer dimensions for the embedding model")
+    parser.add_argument("--batch_size", type=int, default=128,
+                        help="Batch size for training")
+    parser.add_argument("--num_epochs", type=int, default=50,
+                        help="Number of training epochs per fold")
+    parser.add_argument("--learning_rate", type=float, default=0.001,
+                        help="Learning rate for optimizer")
+    
+    # Parse arguments
+    args = parser.parse_args()
+
+    main(args)
