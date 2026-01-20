@@ -407,7 +407,7 @@ def main():
     config = get_config()
     config.print_config()
 
-    DEVICE = "cuda" if (torch.cuda.is_available() and config.use_cuda) else ("mps" if torch.backends.mps.is_available() else "cpu")
+    DEVICE = "cuda" if (torch.cuda.is_available() and config.use_cuda) else "cpu"
     print(f"Using device: {DEVICE}")
 
     # Load data

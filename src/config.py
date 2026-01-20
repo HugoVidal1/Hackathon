@@ -25,7 +25,7 @@ class Config(BaseModel):
 
     # Model architecture
     model_type: str = Field(
-        default="feedforward",
+        default="lstm",
         description="Type of model to use: 'feedforward' or 'lstm'",
     )
     embedding_dim: int = Field(
@@ -61,7 +61,7 @@ class Config(BaseModel):
         description="Batch size for training",
     )
     num_epochs: int = Field(
-        default=50,
+        default=5,
         gt=0,
         description="Number of training epochs per LOPO fold",
     )
@@ -78,7 +78,7 @@ class Config(BaseModel):
 
     # Device settings
     use_cuda: bool = Field(
-        default=True,
+        default=False,
         description="Set to False to force CPU usage",
     )
     random_seed: int = Field(
@@ -120,6 +120,7 @@ class Config(BaseModel):
 
         validate_assignment = True
         extra = "forbid"  # Prevent adding unexpected fields
+        protected_namespaces = ()  # Allow model_ prefix
 
     def print_config(self) -> None:
         """Print current configuration in a formatted way."""
