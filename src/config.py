@@ -50,7 +50,7 @@ class Config(BaseModel):
         description="Batch size for training",
     )
     num_epochs: int = Field(
-        default=50,
+        default=3,
         gt=0,
         description="Number of training epochs per LOPO fold",
     )

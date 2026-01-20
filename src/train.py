@@ -399,74 +399,11 @@ def main():
     print(type(features), features.shape)
 
     # Train with LOPO
-    # results = train_lopo(
-    #     features=features,
-    #     labels=labels,
-    #     patient_ids=patient_ids,
-    #     recording_ids=recording_ids,
-    #     embedding_dim=config.embedding_dim,
-    #     hidden_dims=config.hidden_dims,
-    #     batch_size=config.batch_size,
-    #     num_epochs=config.num_epochs,
-    #     learning_rate=config.learning_rate,
-    #     device=DEVICE,
-    # )
-
-    ###### DEV
-    dataset_ratio = 0.01
-
-    patient_list = (
-        [f'patient_000{i}' for i in range(10)]
-        + [f'patient_00{i}' for i in range(10, 14)]
-    )
-
-    features_dev = []
-    labels_dev = []
-    patient_ids_dev = []
-    recording_ids_dev = []
-
-    for patient in patient_list:
-        # indices globaux du patient
-        idx_patient = np.where(patient_ids == patient)[0]
-
-        if len(idx_patient) == 0:
-            continue
-
-        # séparation par classe
-        idx_healthy = idx_patient[labels[idx_patient] == 0]
-        idx_sick = idx_patient[labels[idx_patient] == 1]
-
-        # nombre à prélever (au moins 1 si possible)
-        n_healthy = max(1, int(len(idx_healthy) * dataset_ratio)) if len(idx_healthy) > 0 else 0
-        n_sick = max(1, int(len(idx_sick) * dataset_ratio)) if len(idx_sick) > 0 else 0
-
-        # sélection (sans shuffle pour l’instant ; ajoute np.random.choice si besoin)
-        sel_healthy = idx_healthy[:n_healthy]
-        sel_sick = idx_sick[:n_sick]
-
-        # concaténation patient-wise
-        selected_idx = np.concatenate([sel_healthy, sel_sick])
-
-        features_dev.append(features[selected_idx])
-        labels_dev.append(labels[selected_idx])
-        patient_ids_dev.append(patient_ids[selected_idx])
-        recording_ids_dev.append(recording_ids[selected_idx])
-
-    # concaténation finale
-    features_dev = np.concatenate(features_dev, axis=0)
-    labels_dev = np.concatenate(labels_dev, axis=0)
-    patient_ids_dev = np.concatenate(patient_ids_dev, axis=0)
-    recording_ids_dev = np.concatenate(recording_ids_dev, axis=0)
-
-    print("DEV set size:", features_dev.shape)
-    print("Label distribution:", np.bincount(labels_dev))
-    
-    # Train with LOPO - DEV
     results = train_lopo(
-        features=features_dev,
-        labels=labels_dev,
-        patient_ids=patient_ids_dev,
-        recording_ids=recording_ids_dev,
+        features=features,
+        labels=labels,
+        patient_ids=patient_ids,
+        recording_ids=recording_ids,
         embedding_dim=config.embedding_dim,
         hidden_dims=config.hidden_dims,
         batch_size=config.batch_size,
@@ -474,6 +411,69 @@ def main():
         learning_rate=config.learning_rate,
         device=DEVICE,
     )
+
+    ###### DEV
+    # dataset_ratio = 0.01
+
+    # patient_list = (
+    #     [f'patient_000{i}' for i in range(10)]
+    #     + [f'patient_00{i}' for i in range(10, 14)]
+    # )
+
+    # features_dev = []
+    # labels_dev = []
+    # patient_ids_dev = []
+    # recording_ids_dev = []
+
+    # for patient in patient_list:
+    #     # indices globaux du patient
+    #     idx_patient = np.where(patient_ids == patient)[0]
+
+    #     if len(idx_patient) == 0:
+    #         continue
+
+    #     # séparation par classe
+    #     idx_healthy = idx_patient[labels[idx_patient] == 0]
+    #     idx_sick = idx_patient[labels[idx_patient] == 1]
+
+    #     # nombre à prélever (au moins 1 si possible)
+    #     n_healthy = max(1, int(len(idx_healthy) * dataset_ratio)) if len(idx_healthy) > 0 else 0
+    #     n_sick = max(1, int(len(idx_sick) * dataset_ratio)) if len(idx_sick) > 0 else 0
+
+    #     # sélection (sans shuffle pour l’instant ; ajoute np.random.choice si besoin)
+    #     sel_healthy = idx_healthy[:n_healthy]
+    #     sel_sick = idx_sick[:n_sick]
+
+    #     # concaténation patient-wise
+    #     selected_idx = np.concatenate([sel_healthy, sel_sick])
+
+    #     features_dev.append(features[selected_idx])
+    #     labels_dev.append(labels[selected_idx])
+    #     patient_ids_dev.append(patient_ids[selected_idx])
+    #     recording_ids_dev.append(recording_ids[selected_idx])
+
+    # # concaténation finale
+    # features_dev = np.concatenate(features_dev, axis=0)
+    # labels_dev = np.concatenate(labels_dev, axis=0)
+    # patient_ids_dev = np.concatenate(patient_ids_dev, axis=0)
+    # recording_ids_dev = np.concatenate(recording_ids_dev, axis=0)
+
+    # print("DEV set size:", features_dev.shape)
+    # print("Label distribution:", np.bincount(labels_dev))
+    
+    # # Train with LOPO - DEV
+    # results = train_lopo(
+    #     features=features_dev,
+    #     labels=labels_dev,
+    #     patient_ids=patient_ids_dev,
+    #     recording_ids=recording_ids_dev,
+    #     embedding_dim=config.embedding_dim,
+    #     hidden_dims=config.hidden_dims,
+    #     batch_size=config.batch_size,
+    #     num_epochs=config.num_epochs,
+    #     learning_rate=config.learning_rate,
+    #     device=DEVICE,
+    # )
 
     #####
 
