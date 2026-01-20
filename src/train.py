@@ -13,7 +13,8 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
-
+import datetime
+import os
 from models import EmbeddingModel, LinearClassifierHead
 from utils import (
     compute_per_patient_auc,
@@ -361,12 +362,14 @@ def train_lopo(
 
     # Plot embeddings
     print("Generating embedding visualization...")
+    time = datetime.datetime.now().strftime('%Y_%m_%d-%H_%M')
+
     plot_embeddings_2d(
         all_test_embeddings,
         all_test_labels,
         all_test_patient_ids,
         title=f"Learned Embeddings (LOPO) - Mean AUC: {mean_auc:.4f}",
-        save_path="embeddings_visualization.png",
+        save_path=f"experiments/{time}_embeddings_visualization.png",
     )
     plt.show()
 
@@ -393,13 +396,77 @@ def main():
     features, labels, patient_ids, recording_ids, feature_names = load_data(
         config.data_path
     )
+    print(type(features), features.shape)
 
     # Train with LOPO
+    # results = train_lopo(
+    #     features=features,
+    #     labels=labels,
+    #     patient_ids=patient_ids,
+    #     recording_ids=recording_ids,
+    #     embedding_dim=config.embedding_dim,
+    #     hidden_dims=config.hidden_dims,
+    #     batch_size=config.batch_size,
+    #     num_epochs=config.num_epochs,
+    #     learning_rate=config.learning_rate,
+    #     device=DEVICE,
+    # )
+
+    ###### DEV
+    dataset_ratio = 0.01
+
+    patient_list = (
+        [f'patient_000{i}' for i in range(10)]
+        + [f'patient_00{i}' for i in range(10, 14)]
+    )
+
+    features_dev = []
+    labels_dev = []
+    patient_ids_dev = []
+    recording_ids_dev = []
+
+    for patient in patient_list:
+        # indices globaux du patient
+        idx_patient = np.where(patient_ids == patient)[0]
+
+        if len(idx_patient) == 0:
+            continue
+
+        # séparation par classe
+        idx_healthy = idx_patient[labels[idx_patient] == 0]
+        idx_sick = idx_patient[labels[idx_patient] == 1]
+
+        # nombre à prélever (au moins 1 si possible)
+        n_healthy = max(1, int(len(idx_healthy) * dataset_ratio)) if len(idx_healthy) > 0 else 0
+        n_sick = max(1, int(len(idx_sick) * dataset_ratio)) if len(idx_sick) > 0 else 0
+
+        # sélection (sans shuffle pour l’instant ; ajoute np.random.choice si besoin)
+        sel_healthy = idx_healthy[:n_healthy]
+        sel_sick = idx_sick[:n_sick]
+
+        # concaténation patient-wise
+        selected_idx = np.concatenate([sel_healthy, sel_sick])
+
+        features_dev.append(features[selected_idx])
+        labels_dev.append(labels[selected_idx])
+        patient_ids_dev.append(patient_ids[selected_idx])
+        recording_ids_dev.append(recording_ids[selected_idx])
+
+    # concaténation finale
+    features_dev = np.concatenate(features_dev, axis=0)
+    labels_dev = np.concatenate(labels_dev, axis=0)
+    patient_ids_dev = np.concatenate(patient_ids_dev, axis=0)
+    recording_ids_dev = np.concatenate(recording_ids_dev, axis=0)
+
+    print("DEV set size:", features_dev.shape)
+    print("Label distribution:", np.bincount(labels_dev))
+    
+    # Train with LOPO - DEV
     results = train_lopo(
-        features=features,
-        labels=labels,
-        patient_ids=patient_ids,
-        recording_ids=recording_ids,
+        features=features_dev,
+        labels=labels_dev,
+        patient_ids=patient_ids_dev,
+        recording_ids=recording_ids_dev,
         embedding_dim=config.embedding_dim,
         hidden_dims=config.hidden_dims,
         batch_size=config.batch_size,
@@ -408,10 +475,13 @@ def main():
         device=DEVICE,
     )
 
+    #####
+
     print("\nTraining complete!")
     print(f"Final Mean ROC AUC: {results['mean_auc']:.4f} ± {results['std_auc']:.4f}")
     print("Embedding visualization saved to: embeddings_visualization.png")
 
+    config.save(additionnal_text=f"Results per patient : \t{results["per_patient_auc"]}\nFinal Mean ROC AUC: \t{results['mean_auc']:.4f} ± {results['std_auc']:.4f}")
 
 if __name__ == "__main__":
     main()

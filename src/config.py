@@ -5,8 +5,11 @@ Modify these values to experiment with different configurations.
 Uses Pydantic for type validation and better structure.
 """
 
+import os
+import datetime
 from typing import List
 from pydantic import BaseModel, Field
+from utils import plot_embeddings_2d
 
 
 class Config(BaseModel):
@@ -116,6 +119,24 @@ class Config(BaseModel):
             value = getattr(self, field_name)
             print(f"  {field_name}: {value}")
         print("=" * 60 + "\n")
+    
+    def save(self, additionnal_text=''):
+        """" Save current configuration. """
+        os.makedirs("experiments", exist_ok=True)
+        time = datetime.datetime.now().strftime('%Y_%m_%d-%H_%M')
+        save_file = f"experiments/{time}_config.txt"
+
+        with open(save_file, 'w', encoding='utf-8') as f :
+            f.write("\n" + "=" * 60)
+            f.write("\n CONFIGURATION")
+            f.write("\n" + "=" * 60)
+            for field_name, field_info in self.__fields__.items():
+                value = getattr(self, field_name)
+                f.write(f"  {field_name}: {value}")
+            f.write(f"\n + {additionnal_text}")
+            
+
+
 
 
 def get_config() -> Config:
