@@ -670,23 +670,24 @@ def main_Transformer():
     config.save(additionnal_text=f"Results per patient : \t{results["per_patient_auc"]}\nFinal Mean ROC AUC: \t{results['mean_auc']:.4f} ± {results['std_auc']:.4f}")
 
 if __name__ == "__main__":
-    # df = pd.read_parquet("data/dataset_with_aug_dict.parquet")
-    # print(df)
     main_Transformer()
     # Add embedding model with contrastive supervised loss
+
     # Change the classification loss and the contrastive loss to take the imbalance into account
     # Pour embedder un recording, un attention pooling peut être plus intelligent qu'une simple moyenne
-    # Augmentation de données
-    # Centrer les features du patient par rapport à son ensemble de recordings
-    # Pondérer le positionnal encoding en fonction 
-    # dans l'attention prendre en compte la disatnce de temps entre les tokens
-    # intégreer sigma dans le dataset reduit
-    # pendre en compte l'augmentation et éventuellemnt augmenté avec du dropout
+   
+    # Pondérer le positionnal encoding en fonction de l'écart de temps, i.e. dans l'attention prendre en compte la disatnce de temps entre les tokens
+    # 
+    # prendre en compte l'augmentation et éventuellemnt augmenté avec du dropout
 
-    ### Taches 
-    # Hugo : Améliorer l'augmentation des données et éventuellement ajouter des données avec du dropout
+    ###### Taches  ######
+
+    # Hugo : Améliorer l'augmentation des données en séparant les données d'un même jour lors de l'aggrégation, ajouter la variance 
+    # éventuellement ajouter des données avec du dropout. 
+    # Centrer les features du patient par rapport à son ensemble de recordings
     # Haochen : Pondérer l'attention par l'écart de temps entre le dernier segment et les segments du contexte. 
     #(Travailler sur le positionnal encoding)
-    # PL : Travailler sur la contrastive loss pour améliorer le transformer embedder
+    # PL : Travailler sur la contrastive loss pour améliorer le transformer embedder. 
+    # Regarder pour prendre en compte l'imbalance des classes.
     # Regarder s'il est intéressant d'avoir un classifier plus complexe qu'un classifier linéaire après l'embeddeur
     
