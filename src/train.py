@@ -684,4 +684,9 @@ if __name__ == "__main__":
     # pendre en compte l'augmentation et éventuellemnt augmenté avec du dropout
 
     ### Taches 
-    #
+    # Hugo : Améliorer l'augmentation des données et éventuellement ajouter des données avec du dropout
+    # Haochen : Pondérer l'attention par l'écart de temps entre le dernier segment et les segments du contexte. 
+    #(Travailler sur le positionnal encoding)
+    # PL : Travailler sur la contrastive loss pour améliorer le transformer embedder
+    # Regarder s'il est intéressant d'avoir un classifier plus complexe qu'un classifier linéaire après l'embeddeur
+    
