@@ -13,7 +13,7 @@ sys.path.insert(0, "src")
 from utils import extract_date_from_recording_id
 
 
-def explore_dataset(data_path="data/dataset.parquet"):
+def explore_dataset(data_path="src/data/dataset.parquet"):
     """Explore the dataset and print useful statistics."""
 
     print("=" * 70)
