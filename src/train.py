@@ -671,14 +671,10 @@ def main_Transformer():
 
 if __name__ == "__main__":
     main_Transformer()
+    
     # Add embedding model with contrastive supervised loss
-
-    # Change the classification loss and the contrastive loss to take the imbalance into account
     # Pour embedder un recording, un attention pooling peut être plus intelligent qu'une simple moyenne
-   
-    # Pondérer le positionnal encoding en fonction de l'écart de temps, i.e. dans l'attention prendre en compte la disatnce de temps entre les tokens
-    # 
-    # prendre en compte l'augmentation et éventuellemnt augmenté avec du dropout
+
 
     ###### Taches  ######
 
