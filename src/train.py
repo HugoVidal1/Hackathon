@@ -671,10 +671,10 @@ def main_Transformer():
 
 if __name__ == "__main__":
     main_Transformer()
-    
+
     # Add embedding model with contrastive supervised loss
     # Pour embedder un recording, un attention pooling peut être plus intelligent qu'une simple moyenne
-
+    # Améliorer l'embedding de la donnée aggrégée en ajoutant plus qu'une simple couche linéaire.
 
     ###### Taches  ######
 
