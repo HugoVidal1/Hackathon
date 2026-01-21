@@ -1,0 +1,89 @@
+Number of patients: 14
+
+Recordings per patient:
+  Mean: 5253.0
+  Median: 4765.5
+  Min: 1407
+  Max: 13946
+
+==================
+LABEL DISTRIBUTION
+==================
+Overall:
+  Stable (0): 62,614 (85.1%)
+  Pre-hospitalization (1): 10,928 (14.9%)
+
+Per patient:
+  patient_0000: 6654 stable, 722 pre-hosp (9.8% positive)
+  patient_0001: 3985 stable, 818 pre-hosp (17.0% positive)
+  patient_0002: 13332 stable, 614 pre-hosp (4.4% positive)
+  patient_0003: 2729 stable, 910 pre-hosp (25.0% positive)
+  patient_0004: 5223 stable, 397 pre-hosp (7.1% positive)
+  patient_0005: 5525 stable, 675 pre-hosp (10.9% positive)
+  patient_0006: 2004 stable, 845 pre-hosp (29.7% positive)
+  patient_0007: 1135 stable, 272 pre-hosp (19.3% positive)
+  patient_0008: 1319 stable, 393 pre-hosp (23.0% positive)
+  patient_0009: 2263 stable, 643 pre-hosp (22.1% positive)
+  patient_0010: 3763 stable, 965 pre-hosp (20.4% positive)
+  patient_0011: 1393 stable, 1309 pre-hosp (48.4% positive)
+  patient_0012: 4993 stable, 1464 pre-hosp (22.7% positive)
+  patient_0013: 8296 stable, 901 pre-hosp (9.8% positive)
+
+====================
+TEMPORAL INFORMATION
+====================
+
+Recording date range:
+  First recording: 2021-09-13
+  Last recording:  2022-08-21
+  Total span:        342 days
+
+Follow-up period per patient:
+  patient_0000: 327 days (2021-09-17 to 2022-08-10), 7376 recordings
+  patient_0001: 196 days (2021-09-21 to 2022-04-05), 4803 recordings
+  patient_0002: 320 days (2021-10-01 to 2022-08-17), 13946 recordings
+  patient_0003: 296 days (2021-09-17 to 2022-07-10), 3639 recordings
+  patient_0004: 342 days (2021-09-13 to 2022-08-21), 5620 recordings
+  patient_0005: 327 days (2021-09-26 to 2022-08-19), 6200 recordings
+  patient_0006:  90 days (2021-12-17 to 2022-03-17), 2849 recordings
+  patient_0007: 209 days (2021-10-30 to 2022-05-27), 1407 recordings
+  patient_0008:  97 days (2021-12-29 to 2022-04-05), 1712 recordings
+  patient_0009: 186 days (2022-02-07 to 2022-08-12), 2906 recordings
+  patient_0010: 168 days (2022-01-29 to 2022-07-16), 4728 recordings
+  patient_0011: 247 days (2021-11-04 to 2022-07-09), 2702 recordings
+  patient_0012: 278 days (2021-11-10 to 2022-08-15), 6457 recordings
+  patient_0013: 188 days (2022-02-14 to 2022-08-21), 9197 recordings
+
+===================
+FEATURE INFORMATION
+===================
+Number of acoustic features: 786
+
+Feature categories:
+  F0final:               13 features
+  age:                    1 features
+  audSpec:              312 features
+  audio:                  1 features
+  audspec:               12 features
+  audspecRasta:          12 features
+  end:                    1 features
+  jitterDDP:             12 features
+  jitterLocal:           12 features
+  logHNR:                12 features
+  mfcc:                 168 features
+  pcm:                  204 features
+  sex:                    1 features
+  shimmerLocal:          12 features
+  start:                  1 features
+  voicingFinalUnclipped: 12 features
+
+Key takeaways:
+1. Dataset is imbalanced (more stable than pre-hospitalization recordings)
+2. Patients have varying numbers of recordings and follow-up periods
+3. Temporal information is available - use it for modeling!
+4. Recording dates extracted from recording_id show clear temporal patterns
+
+Next steps:
+- Run: python src/train.py (to train baseline model)
+- Modify: src/models.py (to improve the embedding model)
+- Experiment with temporal modeling and patient-specific features!

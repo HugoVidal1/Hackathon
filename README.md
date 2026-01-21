@@ -6,7 +6,8 @@ In this challenge, you will develop **patient-specific, temporal-aware represent
 
 ## The Task
 
-Each patient in the dataset has been followed longitudinally over several months with regular voice recordings. Your goal is to:
+Each patient in the dataset has been followed longitudinally over several months with regular voice recordings.
+Your goal is to:
 
 1. **Learn meaningful embeddings** from pre-computed acoustic feature vectors
 2. **Detect progressive voice degradation** that signals impending hospitalization
@@ -92,10 +93,12 @@ Some ideas:
 ## Important Notes
 
 ### LOPO Enforcement
-The training loop ensures no patient's data appears in both train and test sets. **Do not modify this behavior** as it would invalidate your results.
+The training loop ensures no patient's data appears in both train and test sets.
+**Do not modify this behavior** as it would invalidate your results.
 
 ### Linear Head Constraint
-The classifier head is a simple linear layer. This constraint ensures you focus on learning rich embeddings rather than relying on a complex classifier.
+The classifier head is a simple linear layer.
+This constraint ensures you focus on learning rich embeddings rather than relying on a complex classifier.
 
 ### Temporal Awareness
 Recordings have `start_time` and `end_time` information. Use this to model the temporal progression of voice changes!
@@ -110,4 +113,3 @@ Recordings have `start_time` and `end_time` information. Use this to model the t
 ## Good Luck!
 
 Remember: The goal is to create embeddings that capture the subtle, progressive changes in voice that precede hospitalization. Think about what makes voice change over time and how you can model that effectively.
-

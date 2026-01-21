@@ -14,7 +14,8 @@ from torch.utils.data import Dataset, DataLoader
 from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 
-from models import EmbeddingModel, LinearClassifierHead
+# Use EmbeddingModel or EmbeddingTransformer
+from models import EmbeddingTransformer, LinearClassifierHead
 from utils import (
     compute_per_patient_auc,
     aggregate_patient_aucs,
@@ -116,7 +117,7 @@ def load_data(data_path: str):
     return features, labels, patient_ids, recording_ids, feature_cols
 
 
-def train_epoch(model, classifier, train_loader, criterion, optimizer, device):
+def train_epoch(model, classifier, train_loader, criterion, optimizer, max_grad_norm, device):
     """Train for one epoch."""
     model.train()
     classifier.train()
@@ -134,6 +135,10 @@ def train_epoch(model, classifier, train_loader, criterion, optimizer, device):
         # Backward pass
         optimizer.zero_grad()
         loss.backward()
+        if max_grad_norm and max_grad_norm > 0:
+            torch.nn.utils.clip_grad_norm_(
+                list(model.parameters()) + list(classifier.parameters()), max_norm=max_grad_norm
+            )
         optimizer.step()
 
         total_loss += loss.item() * features.size(0)
@@ -201,10 +206,13 @@ def train_lopo(
     batch_size: int = 128,
     num_epochs: int = 50,
     learning_rate: float = 0.001,
+    weight_decay: float = 0.0,
+    max_grad_norm: float = 1.0,
+    dropout: float = 0.3,
     device: str = "cpu",
 ):
     """
-    Train using Leave-One-Patient-Out cross-validation.
+    Train using Leave-One-Patient-Out (LOPO) cross-validation.
 
     Parameters
     ----------
@@ -226,6 +234,12 @@ def train_lopo(
         Number of training epochs per fold.
     learning_rate : float, default=0.001
         Learning rate for optimizer.
+    weight_decay : float, default=0.0
+        L2 regularization.
+    max_grad_norm : float, default=1.0
+        Max gradient norm for clipping.
+    dropout: float, default=0.3
+        Dropout rate for training.
     device : str, default='cpu'
         Device to use ('cpu' or 'cuda').
 
@@ -234,6 +248,7 @@ def train_lopo(
     all_results : dict
         Dictionary containing results for all folds.
     """
+    
     unique_patients = np.unique(patient_ids)
     print(f"\nStarting LOPO cross-validation with {len(unique_patients)} folds...\n")
 
@@ -244,65 +259,62 @@ def train_lopo(
     all_test_recording_ids = []
 
     for test_patient in unique_patients:
-        print(f"\n{'=' * 60}")
+        print(f"\n{'=' * 40}")
         print(f"Fold: Holding out {test_patient}")
-        print(f"{'=' * 60}")
+        print(f"{'=' * 40}")
 
-        # Split data: train on all patients except test_patient
+        # Split data: train on all patients except "test_patient"
         train_mask = patient_ids != test_patient
         test_mask = patient_ids == test_patient
 
         X_train, y_train = features[train_mask], labels[train_mask]
         X_test, y_test = features[test_mask], labels[test_mask]
+        
         patient_ids_train = patient_ids[train_mask]
         patient_ids_test = patient_ids[test_mask]
+        
         recording_ids_train = recording_ids[train_mask]
         recording_ids_test = recording_ids[test_mask]
 
+        counts_train = np.bincount(y_train)     # [neg, pos]
+        counts_test = np.bincount(y_test)
+        
         print(f"Train samples: {len(X_train)} | Test samples: {len(X_test)}")
-        print(f"Train label dist: {np.bincount(y_train)}")
-        print(f"Test label dist: {np.bincount(y_test)}")
+        print(f"Train label dist: {counts_train} | Test label dist: {counts_test}")
 
         # Standardize features (fit on train, transform both)
         scaler = StandardScaler()
-        X_train = scaler.fit_transform(X_train)
-        X_test = scaler.transform(X_test)
+        X_train = scaler.fit_transform(X_train).astype(np.float32)
+        X_test = scaler.transform(X_test).astype(np.float32)
 
         # Create datasets and dataloaders
-        train_dataset = VoiceDataset(
-            X_train, y_train, patient_ids_train, recording_ids_train
-        )
-        test_dataset = VoiceDataset(
-            X_test, y_test, patient_ids_test, recording_ids_test
-        )
+        train_dataset = VoiceDataset(X_train, y_train, patient_ids_train, recording_ids_train)
+        test_dataset = VoiceDataset(X_test, y_test, patient_ids_test, recording_ids_test)
 
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
         test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-        # Initialize model and classifier
-        input_dim = features.shape[1]
-        model = EmbeddingModel(
-            input_dim=input_dim, embedding_dim=embedding_dim, hidden_dims=hidden_dims
+        # Initialize model and classifier (use EmbeddingModel or EmbeddingTransformer)
+        model = EmbeddingTransformer(
+            input_dim=features.shape[1], embedding_dim=embedding_dim, hidden_dims=hidden_dims, dropout=dropout
         ).to(device)
-
-        classifier = LinearClassifierHead(
-            embedding_dim=embedding_dim, num_classes=2
-        ).to(device)
-
+        classifier = LinearClassifierHead(embedding_dim=embedding_dim, num_classes=2).to(device)
         print(f"Model parameters: {model.get_num_parameters():,}")
 
-        # Setup training
-        criterion = nn.CrossEntropyLoss()
-        optimizer = optim.Adam(
-            list(model.parameters()) + list(classifier.parameters()), lr=learning_rate
+        # Criterion with comparable contributions between 0/1 labels
+        weights = torch.tensor([1.0, counts_train[0] / counts_train[1]], device=device).float()
+        criterion = torch.nn.CrossEntropyLoss(weight=weights)
+
+        # Optimizer (EmbeddingModel: Adam; EmbeddingTransformer: AdamW)
+        # optimizer = optim.Adam(list(model.parameters()) + list(classifier.parameters()), lr=learning_rate)
+        optimizer = optim.AdamW(
+            list(model.parameters()) + list(classifier.parameters()), lr=learning_rate, weight_decay=weight_decay
         )
 
         # Training loop
         best_loss = float("inf")
         for epoch in range(num_epochs):
-            train_loss = train_epoch(
-                model, classifier, train_loader, criterion, optimizer, device
-            )
+            train_loss = train_epoch(model, classifier, train_loader, criterion, optimizer, max_grad_norm, device)
 
             if (epoch + 1) % 10 == 0:
                 print(f"Epoch {epoch + 1}/{num_epochs} - Loss: {train_loss:.4f}")
@@ -322,9 +334,7 @@ def train_lopo(
         all_test_recording_ids.append(test_rids)
 
         # Compute per-patient AUC for this fold (at recording level)
-        per_patient_auc = compute_per_patient_auc(
-            test_pids, test_labels_array, test_preds, test_rids
-        )
+        per_patient_auc = compute_per_patient_auc(test_pids, test_labels_array, test_preds, test_rids)
         all_per_patient_aucs.update(per_patient_auc)
 
         # Print fold results
@@ -349,9 +359,7 @@ def train_lopo(
         n_iterations=100,
     )
 
-    print_evaluation_results(
-        all_per_patient_aucs, mean_auc, std_auc, "LOPO", (random_mean, random_std)
-    )
+    print_evaluation_results(all_per_patient_aucs, mean_auc, std_auc, "LOPO", (random_mean, random_std))
 
     # Concatenate all test results for visualization
     all_test_embeddings = np.vstack(all_test_embeddings)
@@ -390,9 +398,7 @@ def main():
     print(f"Using device: {DEVICE}")
 
     # Load data
-    features, labels, patient_ids, recording_ids, feature_names = load_data(
-        config.data_path
-    )
+    features, labels, patient_ids, recording_ids, feature_names = load_data(config.data_path)
 
     # Train with LOPO
     results = train_lopo(
@@ -405,6 +411,9 @@ def main():
         batch_size=config.batch_size,
         num_epochs=config.num_epochs,
         learning_rate=config.learning_rate,
+        weight_decay=config.weight_decay,
+        max_grad_norm=config.max_grad_norm,
+        dropout=config.dropout,
         device=DEVICE,
     )
 

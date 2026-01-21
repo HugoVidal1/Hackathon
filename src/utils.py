@@ -11,9 +11,7 @@ from typing import Dict, List, Tuple, Union
 from datetime import datetime
 
 
-def extract_date_from_recording_id(
-    recording_id: Union[str, pd.Series],
-) -> Union[datetime, pd.Series]:
+def extract_date_from_recording_id(recording_id: Union[str, pd.Series]) -> Union[datetime, pd.Series]:
     """
     Extract date from recording_id.
 
@@ -47,9 +45,7 @@ def extract_date_from_recording_id(
         return datetime.strptime(date_str, "%Y-%m-%d")
 
 
-def aggregate_predictions_per_recording(
-    recording_ids: np.ndarray, y_pred: np.ndarray
-) -> Tuple[np.ndarray, np.ndarray]:
+def aggregate_predictions_per_recording(recording_ids: np.ndarray, y_pred: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """
     Average prediction values per recording_id.
     
@@ -148,9 +144,7 @@ def compute_per_patient_auc(
     return per_patient_auc
 
 
-def aggregate_patient_aucs(
-    per_patient_auc: Dict[str, float],
-) -> Tuple[float, float, List[float]]:
+def aggregate_patient_aucs(per_patient_auc: Dict[str, float]) -> Tuple[float, float, List[float]]:
     """
     Aggregate per-patient AUC scores by computing mean and standard deviation.
 
@@ -295,9 +289,7 @@ def compute_random_baseline(
         random_predictions = np.random.rand(len(y_true))
         
         # Compute per-patient AUC
-        per_patient_auc = compute_per_patient_auc(
-            patient_ids, y_true, random_predictions, recording_ids
-        )
+        per_patient_auc = compute_per_patient_auc(patient_ids, y_true, random_predictions, recording_ids)
         
         # Aggregate
         _, _, valid_aucs = aggregate_patient_aucs(per_patient_auc)

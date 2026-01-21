@@ -1,6 +1,5 @@
 """
 Data exploration script.
-
 Run this to understand the dataset structure before diving into modeling.
 """
 
@@ -10,7 +9,7 @@ import matplotlib.pyplot as plt
 
 # Add src to path to import utils
 sys.path.insert(0, "src")
-from utils import extract_date_from_recording_id
+from src.utils import extract_date_from_recording_id
 
 
 def explore_dataset(data_path="data/dataset.parquet"):
@@ -47,9 +46,7 @@ def explore_dataset(data_path="data/dataset.parquet"):
     label_counts = df["label"].value_counts()
     print("Overall:")
     print(f"  Stable (0): {label_counts[0]:,} ({label_counts[0] / len(df) * 100:.1f}%)")
-    print(
-        f"  Pre-hospitalization (1): {label_counts[1]:,} ({label_counts[1] / len(df) * 100:.1f}%)"
-    )
+    print(f"  Pre-hospitalization (1): {label_counts[1]:,} ({label_counts[1] / len(df) * 100:.1f}%)")
 
     print("\nPer patient:")
     for patient in sorted(unique_patients):
@@ -73,9 +70,7 @@ def explore_dataset(data_path="data/dataset.parquet"):
     print("\nRecording date range:")
     print(f"  First recording: {df['recording_date'].min().date()}")
     print(f"  Last recording: {df['recording_date'].max().date()}")
-    print(
-        f"  Total span: {(df['recording_date'].max() - df['recording_date'].min()).days} days"
-    )
+    print(f"  Total span: {(df['recording_date'].max() - df['recording_date'].min()).days} days")
 
     print("\nFollow-up period per patient:")
     for patient in sorted(unique_patients):
@@ -149,9 +144,7 @@ def explore_dataset(data_path="data/dataset.parquet"):
         patient_df = df[df["patient_short_id"] == patient].sort_values("recording_date")
         # Normalize dates to days since first recording for this patient
         first_date = patient_df["recording_date"].min()
-        patient_df["days_since_start"] = (
-            patient_df["recording_date"] - first_date
-        ).dt.days
+        patient_df["days_since_start"] = (patient_df["recording_date"] - first_date).dt.days
 
         colors = ["steelblue" if label == 0 else "red" for label in patient_df["label"]]
         ax.scatter(
@@ -163,18 +156,16 @@ def explore_dataset(data_path="data/dataset.parquet"):
             label=patient if i < 5 else None,  # Only label first 5 for legend
         )
 
-    ax.set_title(
-        "Patient Timelines (Days Since First Recording)", fontsize=14, fontweight="bold"
-    )
+    ax.set_title("Patient Timelines (Days Since First Recording)", fontsize=14, fontweight="bold")
     ax.set_xlabel("Days Since First Recording")
     ax.set_ylabel("Patient (ordered)")
     ax.set_yticks(range(len(unique_patients)))
     ax.set_yticklabels([f"P{i}" for i in range(len(unique_patients))], fontsize=8)
     if len(unique_patients) <= 5:
         ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left", fontsize=8)
+        
     # Add custom legend for colors
     from matplotlib.patches import Patch
-
     legend_elements = [
         Patch(facecolor="steelblue", alpha=0.6, label="Stable"),
         Patch(facecolor="red", alpha=0.6, label="Pre-hospitalization"),

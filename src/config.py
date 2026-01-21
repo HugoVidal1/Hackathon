@@ -25,16 +25,16 @@ class Config(BaseModel):
 
     # Model architecture
     embedding_dim: int = Field(
-        default=64,
+        default=32,                 # 64,
         gt=0,
         description="Dimension of learned embeddings",
     )
     hidden_dims: List[int] = Field(
-        default=[256, 128],
+        default=[64, 256],          # [256, 128],
         description="Hidden layer dimensions (can add more layers)",
     )
     dropout: float = Field(
-        default=0.3,
+        default=0,                  # 0.3,
         ge=0.0,
         le=1.0,
         description="Dropout probability for regularization",
@@ -42,24 +42,29 @@ class Config(BaseModel):
 
     # Training settings
     batch_size: int = Field(
-        default=128,
+        default=1024,               # 128
         gt=0,
         description="Batch size for training",
     )
     num_epochs: int = Field(
-        default=50,
+        default=50,                 # 50
         gt=0,
         description="Number of training epochs per LOPO fold",
     )
     learning_rate: float = Field(
-        default=0.001,
+        default=3e-4,               # 0.001
         gt=0.0,
         description="Learning rate for optimizer",
     )
     weight_decay: float = Field(
-        default=0.0,
+        default=1e-4,               # 0.0
         ge=0.0,
         description="L2 regularization (0 = no regularization)",
+    )
+    max_grad_norm: float = Field(
+        default=1.0,                # 0.0
+        ge=0.0,
+        description="Max gradient norm for clipping (0 = disable)",
     )
 
     # Device settings
@@ -103,18 +108,18 @@ class Config(BaseModel):
 
     class Config:
         """Pydantic configuration."""
-
         validate_assignment = True
         extra = "forbid"  # Prevent adding unexpected fields
-
+        
     def print_config(self) -> None:
-        """Print current configuration in a formatted way."""
         print("\n" + "=" * 60)
         print("CONFIGURATION")
         print("=" * 60)
-        for field_name, field_info in self.__fields__.items():
-            value = getattr(self, field_name)
-            print(f"  {field_name}: {value}")
+        for field_name in self.__class__.model_fields:
+            print(f"  {field_name}: {getattr(self, field_name)}")
+        # for field_name, field_info in self.model_fields.items():
+        #     value = getattr(self, field_name)
+        #     print(f"  {field_name}: {value}")
         print("=" * 60 + "\n")
 
 
