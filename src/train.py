@@ -315,7 +315,14 @@ def train_lopo_Transformer(
         print(f"Model parameters: {model.get_num_parameters():,}")
 
         # Setup training
-        criterion = nn.CrossEntropyLoss()
+        # Handle class imbalance
+        class_weights = torch.tensor(
+            [
+                1.0,  # 1 for class 0
+                (len(y_train) - np.sum(y_train)) / np.sum(y_train)  # Negative/Positive ratio for class 1
+            ], device=device, dtype=torch.float32
+        )
+        criterion = nn.CrossEntropyLoss(weight=class_weights)
         optimizer = optim.Adam(
             list(model.parameters()) + list(classifier.parameters()), lr=learning_rate
         )
@@ -508,7 +515,14 @@ def train_lopo_MLP(
         print(f"Model parameters: {model.get_num_parameters():,}")
 
         # Setup training
-        criterion = nn.CrossEntropyLoss()
+        # Handle class imbalance
+        class_weights = torch.tensor(
+            [
+                1.0,  # 1 for class 0
+                (len(y_train) - np.sum(y_train)) / np.sum(y_train)  # Negative/Positive ratio for class 1
+            ], device=device, dtype=torch.float32
+        )
+        criterion = nn.CrossEntropyLoss(weight=class_weights)
         optimizer = optim.Adam(
             list(model.parameters()) + list(classifier.parameters()), lr=learning_rate
         )
@@ -630,7 +644,7 @@ def main_MLP():
     print(f"Final Mean ROC AUC: {results['mean_auc']:.4f} ± {results['std_auc']:.4f}")
     print("Embedding visualization saved to: embeddings_visualization.png")
 
-    config.save(additionnal_text=f"Results per patient : \t{results["per_patient_auc"]}\nFinal Mean ROC AUC: \t{results['mean_auc']:.4f} ± {results['std_auc']:.4f}")
+    config.save(additionnal_text=f"Results per patient : \t{results['per_patient_auc']}\nFinal Mean ROC AUC: \t{results['mean_auc']:.4f} ± {results['std_auc']:.4f}")
 
 def main_Transformer():
     """Main training function."""
@@ -667,7 +681,7 @@ def main_Transformer():
     print(f"Final Mean ROC AUC: {results['mean_auc']:.4f} ± {results['std_auc']:.4f}")
     print("Embedding visualization saved to: embeddings_visualization.png")
 
-    config.save(additionnal_text=f"Results per patient : \t{results["per_patient_auc"]}\nFinal Mean ROC AUC: \t{results['mean_auc']:.4f} ± {results['std_auc']:.4f}")
+    config.save(additionnal_text=f"Results per patient : \t{results['per_patient_auc']}\nFinal Mean ROC AUC: \t{results['mean_auc']:.4f} ± {results['std_auc']:.4f}")
 
 if __name__ == "__main__":
     main_Transformer()
