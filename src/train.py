@@ -17,6 +17,9 @@ import datetime
 import os
 from models import EmbeddingModel, LinearClassifierHead, Transformer_Decoder
 from utils import (
+    FocalLossBinary,
+    SupConLoss,
+    CenterLoss,
     compute_per_patient_auc,
     aggregate_patient_aucs,
     plot_embeddings_2d,
@@ -109,12 +112,11 @@ class Transformer_VoiceDataset(Dataset):
             self.patient_ids[idx],
             self.recording_ids[idx],
         )
-
-def train_epoch(model, classifier, train_loader, criterion, optimizer, device):
+    
+def train_epoch_encoder(model, classifier, train_loader, criterion_classification, criterion_supcon, criterion_center, encoding, optimizer, train_classifier, device):
     """Train for one epoch."""
     model.train()
-    classifier.train()
-
+    a_contrastive, a_centering = encoding[0], encoding[1]
     total_loss = 0.0
     for features, labels, _, _ in train_loader:  # Added recording_id to unpack
         features = features.to(device)
@@ -122,8 +124,12 @@ def train_epoch(model, classifier, train_loader, criterion, optimizer, device):
 
         # Forward pass
         embeddings = model(features)
-        logits = classifier(embeddings)
-        loss = criterion(logits, labels)
+        loss_center = criterion_center(embeddings, labels)
+        loss_contrastive = criterion_supcon(embeddings, labels)
+        loss = a_contrastive*loss_contrastive + a_centering*loss_center
+        if train_classifier :
+            logits = classifier(embeddings)
+            loss += criterion_classification(logits, labels)
 
         # Backward pass
         optimizer.zero_grad()
@@ -134,7 +140,7 @@ def train_epoch(model, classifier, train_loader, criterion, optimizer, device):
 
     return total_loss / len(train_loader.dataset)
 
-def train_epoch_Transformer(model, classifier, train_loader, criterion, optimizer, device):
+def train_epoch(model, classifier, train_loader, criterion, optimizer, device):
     """Train for one epoch."""
     model.train()
     classifier.train()
@@ -208,6 +214,7 @@ def evaluate(model, classifier, data_loader, device):
 
     return embeddings, predictions, labels, patient_ids, recording_ids
 
+
 def train_lopo_Transformer(
     features: np.ndarray,
     labels: np.ndarray,
@@ -224,6 +231,10 @@ def train_lopo_Transformer(
     learning_rate: float = 0.001,
     device: str = "cpu",
     plot=False,
+    non_linear_classifier=False,
+    train_encoder=True,
+    encoding=None,
+    train_classifier=False
 ):
     """
     Train using Leave-One-Patient-Out cross-validation.
@@ -312,53 +323,117 @@ def train_lopo_Transformer(
             dropout=dropout,
             device=device
             ).to(device)
-
-        classifier = LinearClassifierHead(
-            embedding_dim=embedding_dim, num_classes=2
-        ).to(device)
+        
+        if non_linear_classifier :
+            classifier = nn.Sequential(
+                            EmbeddingModel(input_dim=embedding_dim,embedding_dim=embedding_dim), 
+                            LinearClassifierHead(
+                                embedding_dim=embedding_dim, num_classes=2
+                                ).to(device)
+                            )
+        else :
+            classifier = LinearClassifierHead(
+                embedding_dim=embedding_dim, num_classes=2
+            ).to(device)
+        
 
         print(f"Model parameters: {model.get_num_parameters():,}")
 
         # Setup training
-        criterion = nn.CrossEntropyLoss()
-        optimizer = optim.Adam(
-            list(model.parameters()) + list(classifier.parameters()), lr=learning_rate, weight_decay=1e-1
-        )
+        if encoding is None :
+            criterion = FocalLossBinary() 
+            if train_encoder :
+                optimizer = optim.Adam(
+                    list(model.parameters()) + list(classifier.parameters()), lr=learning_rate, weight_decay=1e-1
+                )
+            else :
+                optimizer = optim.Adam(
+                    list(classifier.parameters()), lr=learning_rate, weight_decay=1e-1
+                )
 
-        # Training loop
-        best_loss = float("inf")
-        for epoch in range(num_epochs):
-            train_loss = train_epoch_Transformer(
-                model, classifier, train_loader, criterion, optimizer, device
+            # Training loop
+            best_loss = float("inf")
+            for epoch in range(num_epochs):
+                train_loss = train_epoch(
+                    model, classifier, train_loader, criterion, optimizer, device
+                )
+
+                if (epoch + 1) % 10 == 0:
+                    print(f"Epoch {epoch + 1}/{num_epochs} - Loss: {train_loss:.4f}")
+
+                if train_loss < best_loss:
+                    best_loss = train_loss
+
+            # Evaluate on test patient
+            test_embeddings, test_preds, test_labels_array, test_pids, test_rids = evaluate(
+                model, classifier, test_loader, device
             )
 
-            if (epoch + 1) % 10 == 0:
-                print(f"Epoch {epoch + 1}/{num_epochs} - Loss: {train_loss:.4f}")
+            # Store results
+            all_test_embeddings.append(test_embeddings)
+            all_test_labels.append(test_labels_array)
+            all_test_patient_ids.append(test_pids)
+            all_test_recording_ids.append(test_rids)
 
-            if train_loss < best_loss:
-                best_loss = train_loss
+            # Compute per-patient AUC for this fold (at recording level)
+            per_patient_auc = compute_per_patient_auc(
+                test_pids, test_labels_array, test_preds, test_rids
+            )
+            all_per_patient_aucs.update(per_patient_auc)
 
-        # Evaluate on test patient
-        test_embeddings, test_preds, test_labels_array, test_pids, test_rids = evaluate(
-            model, classifier, test_loader, device
-        )
+            # Print fold results
+            for pid, auc in per_patient_auc.items():
+                if auc is not None:
+                    print(f"\n{test_patient} ROC AUC (recording level): {auc:.4f}")
+        
+        else :
+            criterion_classification = FocalLossBinary()
+            criterion_supcon = SupConLoss(temperature=0.3) 
+            criterion_center = CenterLoss(2,embedding_dim,device=device)
 
-        # Store results
-        all_test_embeddings.append(test_embeddings)
-        all_test_labels.append(test_labels_array)
-        all_test_patient_ids.append(test_pids)
-        all_test_recording_ids.append(test_rids)
+            if train_classifier :
+                optimizer = optim.Adam(
+                    list(model.parameters()) + list(classifier.parameters()), lr=learning_rate, weight_decay=1e-1
+                )
+            else :
+                optimizer = optim.Adam(
+                    list(model.parameters()), lr=learning_rate, weight_decay=1e-1
+                )
+            # Training loop
+            best_loss = float("inf")
+            for epoch in range(num_epochs):
+                train_loss = train_epoch_encoder(
+                    model, classifier, train_loader, criterion_classification, criterion_supcon, criterion_center, encoding, optimizer, train_classifier, device
+                )
 
-        # Compute per-patient AUC for this fold (at recording level)
-        per_patient_auc = compute_per_patient_auc(
-            test_pids, test_labels_array, test_preds, test_rids
-        )
-        all_per_patient_aucs.update(per_patient_auc)
+                if (epoch + 1) % 10 == 0:
+                    print(f"Epoch {epoch + 1}/{num_epochs} - Loss: {train_loss:.4f}")
 
-        # Print fold results
-        for pid, auc in per_patient_auc.items():
-            if auc is not None:
-                print(f"\n{test_patient} ROC AUC (recording level): {auc:.4f}")
+                if train_loss < best_loss:
+                    best_loss = train_loss
+
+            # Evaluate on test patient
+            test_embeddings, test_preds, test_labels_array, test_pids, test_rids = evaluate(
+                model, classifier, test_loader, device
+            )
+
+            # Store results
+            all_test_embeddings.append(test_embeddings)
+            all_test_labels.append(test_labels_array)
+            all_test_patient_ids.append(test_pids)
+            all_test_recording_ids.append(test_rids)
+
+            # Compute per-patient AUC for this fold (at recording level)
+            per_patient_auc = compute_per_patient_auc(
+                test_pids, test_labels_array, test_preds, test_rids
+            )
+            all_per_patient_aucs.update(per_patient_auc)
+
+            # Print fold results
+            for pid, auc in per_patient_auc.items():
+                if auc is not None:
+                    print(f"\n{test_patient} ROC AUC (recording level): {auc:.4f}")
+
 
     # Aggregate results across all folds
     print(f"\n\n{'#' * 60}")
@@ -508,8 +583,8 @@ def train_lopo_MLP(
         ).to(device)
 
         classifier = LinearClassifierHead(
-            embedding_dim=embedding_dim, num_classes=2
-        ).to(device)
+                    embedding_dim=embedding_dim, num_classes=2
+                    ).to(device)
 
         print(f"Model parameters: {model.get_num_parameters():,}")
 
@@ -670,7 +745,10 @@ def main_Transformer():
         num_epochs=config.num_epochs,
         learning_rate=config.learning_rate,
         device=DEVICE,
-        plot=True
+        plot=True,
+        non_linear_classifier=False,
+        encoding=[0.0,0.1],
+        train_classifier=True,
     )
 
     print("\nTraining complete!")
@@ -695,14 +773,14 @@ def GridSearch_Transformer():
 
 
     params_grid = {
-        "n_features" : [786],
-        "n_layer": [2,3],
+        "n_features" : [600],
+        "n_layer": [3],
         "embedding_dim": [32],
-        "num_heads": [5, 7, 10],
-        "block_size": [5, 8, 10],
-        "batch_size": [128],
+        "num_heads": [15],
+        "block_size": [15],
+        "batch_size": [512],
         "num_epochs": [2],
-        "learning_rate": [1e-2, 1e-3, 1e-4],
+        "learning_rate": [1e-2],
         "dropout": [0.3],
     }
 

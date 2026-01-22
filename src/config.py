@@ -165,7 +165,7 @@ class Config_Transformer(BaseModel):
 
     # Model architecture
     n_features: int = Field(
-        default=2*300,
+        default=2*298,
         description="Nombre de features dans les données")
     
     n_layer: int = Field(
@@ -200,7 +200,7 @@ class Config_Transformer(BaseModel):
         description="Batch size for training",
     )
     num_epochs: int = Field(
-        default=5,
+        default=50,
         gt=0,
         description="Number of training epochs per LOPO fold",
     )
