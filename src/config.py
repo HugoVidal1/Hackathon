@@ -19,7 +19,7 @@ class Config(BaseModel):
 
     # Data settings
     data_path: str = Field(
-        default="data/dataset.parquet",
+        default="data/dataset_with_aug_dict.parquet",
         description="Path to the dataset parquet file",
     )
 
@@ -47,7 +47,7 @@ class Config(BaseModel):
         description="Batch size for training",
     )
     num_epochs: int = Field(
-        default=50,                 # 50
+        default=30,                 # 50
         gt=0,
         description="Number of training epochs per LOPO fold",
     )
@@ -55,6 +55,12 @@ class Config(BaseModel):
         default=3e-4,               # 0.001
         gt=0.0,
         description="Learning rate for optimizer",
+    )
+    warmup_ratio: float = Field(
+        default=0.05,               # 0.0
+        ge=0.0,
+        le=1.0,
+        description="Linear warmup ratio over total training steps (0 = disable)",
     )
     weight_decay: float = Field(
         default=1e-4,               # 0.0
@@ -65,6 +71,11 @@ class Config(BaseModel):
         default=1.0,                # 0.0
         ge=0.0,
         description="Max gradient norm for clipping (0 = disable)",
+    )
+    context_len: int = Field(
+        default=32,
+        gt=0,
+        description="Context length (T) for contextual transformer"
     )
 
     # Device settings
@@ -112,9 +123,9 @@ class Config(BaseModel):
         extra = "forbid"  # Prevent adding unexpected fields
         
     def print_config(self) -> None:
-        print("\n" + "=" * 60)
+        print("\n" + "=" * 20)
         print("CONFIGURATION")
-        print("=" * 60)
+        print("=" * 20)
         for field_name in self.__class__.model_fields:
             print(f"  {field_name}: {getattr(self, field_name)}")
         # for field_name, field_info in self.model_fields.items():
