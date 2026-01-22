@@ -13,19 +13,19 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
-from datetime import datetime
-import argparse
-
-from models import EmbeddingModel, LinearClassifierHead
+import datetime
+import os
+from models import EmbeddingModel, LinearClassifierHead, Transformer_Decoder
 from utils import (
     compute_per_patient_auc,
     aggregate_patient_aucs,
     plot_embeddings_2d,
     print_evaluation_results,
     compute_random_baseline,
+    load_data,
+    load_aggregate_data
 )
-from config import get_config
-from losses import ConstrativeLoss
+from config import get_config, get_config_Transformer
 
 
 # Set random seeds for reproducibility
@@ -65,74 +65,46 @@ class VoiceDataset(Dataset):
             self.patient_ids[idx],
             self.recording_ids[idx],
         )
+    
+class Transformer_VoiceDataset(Dataset):
+    """PyTorch Dataset for voice recordings."""
 
+    def __init__(self, features, labels, patient_ids, recording_ids=None, context_size=4):
+        """
+        Parameters
+        ----------
+        features : np.ndarray
+            Feature matrix of shape (n_samples, n_features).
+        labels : np.ndarray
+            Labels of shape (n_samples,).
+        patient_ids : np.ndarray
+            Patient identifiers of shape (n_samples,).
+        recording_ids : np.ndarray, optional
+            Recording identifiers of shape (n_samples,).
+        """
+        
+        self.features = torch.empty((1, context_size, features.shape[1]))
+        context = torch.zeros((context_size, features.shape[1]))
+        torch_features = torch.FloatTensor(features)
+        for feature in torch_features :
+            context = torch.concatenate((context[1:,:],feature.unsqueeze(0)), dim=0)
+            self.features = torch.concatenate((self.features, context.unsqueeze(0)), dim=0)
 
-def load_data(data_path: str):
-    """
-    Load and preprocess the dataset.
+        # self.features = torch.FloatTensor(features)
+        self.labels = torch.LongTensor(labels)
+        self.patient_ids = patient_ids
+        self.recording_ids = recording_ids if recording_ids is not None else patient_ids
 
-    Parameters
-    ----------
-    data_path : str
-        Path to the parquet file.
+    def __len__(self):
+        return len(self.labels)
 
-    Returns
-    -------
-    features : np.ndarray
-        Feature matrix.
-    labels : np.ndarray
-        Binary labels.
-    patient_ids : np.ndarray
-        Patient identifiers.
-    recording_ids : np.ndarray
-        Recording identifiers.
-    feature_names : list
-        List of feature column names.
-    """
-    print(f"Loading data from {data_path}...")
-    df = pd.read_parquet(data_path)
-
-    # Define metadata columns to exclude from features
-    metadata_cols = [
-        "recording_id",
-        "patient_short_id",
-        "label",
-    ]
-
-    # Get feature columns
-    feature_cols = [col for col in df.columns if col not in metadata_cols]
-
-    # Extract features, labels, patient IDs, and recording IDs
-    df_features = df[feature_cols].copy()
-
-    # Convert datetime columns to numeric to avoid float(Timestamp) errors
-    datetime_cols = df_features.select_dtypes(include=["datetime64[ns]", "datetimetz"]).columns.tolist()
-    if datetime_cols:
-        print(f"Converting datetime columns to int64 (ns): {datetime_cols}")
-        df_features[datetime_cols] = df_features[datetime_cols].astype("int64")
-
-    # Drop any remaining non-numeric columns that cannot be converted
-    non_numeric_cols = df_features.select_dtypes(exclude=[np.number]).columns.tolist()
-    if non_numeric_cols:
-        print(f"Dropping non-numeric feature columns: {non_numeric_cols}")
-        df_features = df_features.drop(columns=non_numeric_cols)
-        feature_cols = [col for col in feature_cols if col not in non_numeric_cols]
-
-    features = df_features.values.astype(np.float32)
-    labels = df["label"].values.astype(np.int64)
-    patient_ids = df["patient_short_id"].values
-    recording_ids = df["recording_id"].values
-
-    # Handle missing values
-    features = np.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0)
-
-    print(f"Loaded {len(df)} samples from {len(np.unique(patient_ids))} patients")
-    print(f"Unique recordings: {len(np.unique(recording_ids))}")
-    print(f"Feature dimension: {features.shape[1]}")
-    print(f"Label distribution: {np.bincount(labels)}")
-
-    return features, labels, patient_ids, recording_ids, feature_cols
-
+    def __getitem__(self, idx):
+        return (
+            self.features[idx],
+            self.labels[idx],
+            self.patient_ids[idx],
+            self.recording_ids[idx],
+        )
 
 def train_epoch(model, classifier, train_loader, criterion, optimizer, device):
     """Train for one epoch."""
@@ -157,6 +129,54 @@ def train_epoch(model, classifier, train_loader, criterion, optimizer, device):
         total_loss += loss.item() * features.size(0)
 
         print(f"Batch number {i}/{len(train_loader)}")
+
+    return total_loss / len(train_loader.dataset)
+
+def train_epoch_Transformer(model, classifier, train_loader, criterion, optimizer, device):
+    """Train for one epoch."""
+    model.train()
+    classifier.train()
+
+    total_loss = 0.0
+    for features, labels, _, _ in train_loader:  # Added recording_id to unpack
+        features = features.to(device)
+        labels = labels.to(device)
+
+        # Forward pass
+        embeddings = model(features)
+        logits = classifier(embeddings)
+        loss = criterion(logits, labels)
+
+        # Backward pass
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        total_loss += loss.item() * features.size(0)
+
+    return total_loss / len(train_loader.dataset)
+
+def train_epoch_Transformer(model, classifier, train_loader, criterion, optimizer, device):
+    """Train for one epoch."""
+    model.train()
+    classifier.train()
+
+    total_loss = 0.0
+    for features, labels, _, _ in train_loader:  # Added recording_id to unpack
+        features = features.to(device)
+        labels = labels.to(device)
+
+        # Forward pass
+        embeddings = model(features)
+        logits = classifier(embeddings)
+        loss = criterion(logits, labels)
+
+        # Backward pass
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        total_loss += loss.item() * features.size(0)
 
     return total_loss / len(train_loader.dataset)
 
@@ -210,8 +230,210 @@ def evaluate(model, classifier, data_loader, device):
 
     return embeddings, predictions, labels, patient_ids, recording_ids
 
+def train_lopo_Transformer(
+    features: np.ndarray,
+    labels: np.ndarray,
+    patient_ids: np.ndarray,
+    recording_ids: np.ndarray,
+    n_features: int,
+    n_layer: int = 3,
+    embedding_dim: int = 64,
+    num_heads: int = 10,
+    block_size: int = 4,
+    dropout: float = 0.3,
+    batch_size: int = 128,
+    num_epochs: int = 50,
+    learning_rate: float = 0.001,
+    criterion: nn.Module = nn.CrossEntropyLoss(),
+    device: str = "cpu",
+):
+    """
+    Train using Leave-One-Patient-Out cross-validation.
 
-def train_lopo(
+    Parameters
+    ----------
+    features : np.ndarray
+        Feature matrix of shape (n_samples, n_features).
+    labels : np.ndarray
+        Binary labels.
+    patient_ids : np.ndarray
+        Patient identifiers.
+    recording_ids : np.ndarray
+        Recording identifiers.
+    embedding_dim : int, default=64
+        Dimension of learned embeddings.
+    hidden_dims : list, default=[256, 128]
+        Hidden layer dimensions.
+    batch_size : int, default=128
+        Batch size for training.
+    num_epochs : int, default=50
+        Number of training epochs per fold.
+    learning_rate : float, default=0.001
+        Learning rate for optimizer.
+    device : str, default='cpu'
+        Device to use ('cpu' or 'cuda').
+
+    Returns
+    -------
+    all_results : dict
+        Dictionary containing results for all folds.
+    """
+    unique_patients = np.unique(patient_ids)
+    print(f"\nStarting LOPO cross-validation with {len(unique_patients)} folds...\n")
+
+    all_per_patient_aucs = {}
+    all_test_embeddings = []
+    all_test_labels = []
+    all_test_patient_ids = []
+    all_test_recording_ids = []
+
+    for test_patient in unique_patients:
+        print(f"\n{'=' * 60}")
+        print(f"Fold: Holding out {test_patient}")
+        print(f"{'=' * 60}")
+
+        # Split data: train on all patients except test_patient
+        train_mask = patient_ids != test_patient
+        test_mask = patient_ids == test_patient
+
+        X_train, y_train = features[train_mask], labels[train_mask]
+        X_test, y_test = features[test_mask], labels[test_mask]
+        patient_ids_train = patient_ids[train_mask]
+        patient_ids_test = patient_ids[test_mask]
+        recording_ids_train = recording_ids[train_mask]
+        recording_ids_test = recording_ids[test_mask]
+
+        print(f"Train samples: {len(X_train)} | Test samples: {len(X_test)}")
+        print(f"Train label dist: {np.bincount(y_train)}")
+        print(f"Test label dist: {np.bincount(y_test)}")
+
+        # Standardize features (fit on train, transform both)
+        scaler = StandardScaler()
+        X_train = scaler.fit_transform(X_train)
+        X_test = scaler.transform(X_test)
+
+        # Create datasets and dataloaders
+        train_dataset = Transformer_VoiceDataset(
+            X_train, y_train, patient_ids_train, recording_ids_train, block_size
+        )
+        test_dataset = Transformer_VoiceDataset(
+            X_test, y_test, patient_ids_test, recording_ids_test, block_size
+        )
+
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+        # Initialize model and classifier
+        input_dim = features.shape[1]
+        model = Transformer_Decoder(
+            n_features=n_features,
+            n_layer=n_layer,
+            embedding_dim=embedding_dim,
+            num_heads=num_heads,
+            block_size=block_size,
+            dropout=dropout,
+            device=device
+            ).to(device)
+
+        classifier = LinearClassifierHead(
+            embedding_dim=embedding_dim, num_classes=2
+        ).to(device)
+
+        print(f"Model parameters: {model.get_num_parameters():,}")
+
+        # Setup training
+        criterion = nn.CrossEntropyLoss()
+        optimizer = optim.Adam(
+            list(model.parameters()) + list(classifier.parameters()), lr=learning_rate
+        )
+
+        # Training loop
+        best_loss = float("inf")
+        for epoch in range(num_epochs):
+            train_loss = train_epoch_Transformer(
+                model, classifier, train_loader, criterion, optimizer, device
+            )
+
+            if (epoch + 1) % 10 == 0:
+                print(f"Epoch {epoch + 1}/{num_epochs} - Loss: {train_loss:.4f}")
+
+            if train_loss < best_loss:
+                best_loss = train_loss
+
+        # Evaluate on test patient
+        test_embeddings, test_preds, test_labels_array, test_pids, test_rids = evaluate(
+            model, classifier, test_loader, device
+        )
+
+        # Store results
+        all_test_embeddings.append(test_embeddings)
+        all_test_labels.append(test_labels_array)
+        all_test_patient_ids.append(test_pids)
+        all_test_recording_ids.append(test_rids)
+
+        # Compute per-patient AUC for this fold (at recording level)
+        per_patient_auc = compute_per_patient_auc(
+            test_pids, test_labels_array, test_preds, test_rids
+        )
+        all_per_patient_aucs.update(per_patient_auc)
+
+        # Print fold results
+        for pid, auc in per_patient_auc.items():
+            if auc is not None:
+                print(f"\n{test_patient} ROC AUC (recording level): {auc:.4f}")
+
+    # Aggregate results across all folds
+    print(f"\n\n{'#' * 60}")
+    print("FINAL RESULTS - Leave-One-Patient-Out Cross-Validation")
+    print(f"{'#' * 60}")
+
+    mean_auc, std_auc, valid_aucs = aggregate_patient_aucs(all_per_patient_aucs)
+
+    # Compute random baseline
+    print("\nComputing random baseline (Monte Carlo, N=100)...")
+    all_test_recording_ids_array = np.concatenate(all_test_recording_ids)
+    random_mean, random_std, _ = compute_random_baseline(
+        np.concatenate(all_test_patient_ids),
+        np.concatenate(all_test_labels),
+        all_test_recording_ids_array,
+        n_iterations=100,
+    )
+
+    print_evaluation_results(
+        all_per_patient_aucs, mean_auc, std_auc, "LOPO", (random_mean, random_std)
+    )
+
+    # Concatenate all test results for visualization
+    all_test_embeddings = np.vstack(all_test_embeddings)
+    all_test_labels = np.concatenate(all_test_labels)
+    all_test_patient_ids = np.concatenate(all_test_patient_ids)
+    all_test_recording_ids_array = np.concatenate(all_test_recording_ids)
+
+    # Plot embeddings
+    print("Generating embedding visualization...")
+    time = datetime.datetime.now().strftime('%Y_%m_%d-%H_%M')
+
+    plot_embeddings_2d(
+        all_test_embeddings,
+        all_test_labels,
+        all_test_patient_ids,
+        title=f"Learned Embeddings (LOPO) - Mean AUC: {mean_auc:.4f}",
+        save_path=f"experiments/{time}_embeddings_visualization.png",
+    )
+    plt.show()
+
+    return {
+        "per_patient_auc": all_per_patient_aucs,
+        "mean_auc": mean_auc,
+        "std_auc": std_auc,
+        "embeddings": all_test_embeddings,
+        "labels": all_test_labels,
+        "patient_ids": all_test_patient_ids,
+    }
+
+
+
+def train_lopo_MLP(
     features: np.ndarray,
     labels: np.ndarray,
     patient_ids: np.ndarray,
@@ -221,8 +443,207 @@ def train_lopo(
     batch_size: int = 128,
     num_epochs: int = 50,
     learning_rate: float = 0.001,
-    criterion: nn.Module = nn.CrossEntropyLoss(),
     device: str = "cpu",
+    aggregate_recordings=False
+):
+    """
+    Train using Leave-One-Patient-Out cross-validation.
+
+    Parameters
+    ----------
+    features : np.ndarray
+        Feature matrix of shape (n_samples, n_features).
+    labels : np.ndarray
+        Binary labels.
+    patient_ids : np.ndarray
+        Patient identifiers.
+    recording_ids : np.ndarray
+        Recording identifiers.
+    embedding_dim : int, default=64
+        Dimension of learned embeddings.
+    hidden_dims : list, default=[256, 128]
+        Hidden layer dimensions.
+    batch_size : int, default=128
+        Batch size for training.
+    num_epochs : int, default=50
+        Number of training epochs per fold.
+    learning_rate : float, default=0.001
+        Learning rate for optimizer.
+    device : str, default='cpu'
+        Device to use ('cpu' or 'cuda').
+
+    Returns
+    -------
+    all_results : dict
+        Dictionary containing results for all folds.
+    """
+    unique_patients = np.unique(patient_ids)
+    print(f"\nStarting LOPO cross-validation with {len(unique_patients)} folds...\n")
+
+    all_per_patient_aucs = {}
+    all_test_embeddings = []
+    all_test_labels = []
+    all_test_patient_ids = []
+    all_test_recording_ids = []
+
+    for test_patient in unique_patients:
+        print(f"\n{'=' * 60}")
+        print(f"Fold: Holding out {test_patient}")
+        print(f"{'=' * 60}")
+
+        # Split data: train on all patients except test_patient
+        train_mask = patient_ids != test_patient
+        test_mask = patient_ids == test_patient
+
+        X_train, y_train = features[train_mask], labels[train_mask]
+        X_test, y_test = features[test_mask], labels[test_mask]
+        patient_ids_train = patient_ids[train_mask]
+        patient_ids_test = patient_ids[test_mask]
+        recording_ids_train = recording_ids[train_mask]
+        recording_ids_test = recording_ids[test_mask]
+
+        print(f"Train samples: {len(X_train)} | Test samples: {len(X_test)}")
+        print(f"Train label dist: {np.bincount(y_train)}")
+        print(f"Test label dist: {np.bincount(y_test)}")
+
+        # Standardize features (fit on train, transform both)
+        scaler = StandardScaler()
+        X_train = scaler.fit_transform(X_train)
+        X_test = scaler.transform(X_test)
+
+        # Create datasets and dataloaders
+        train_dataset = Transformer_VoiceDataset(
+            X_train, y_train, patient_ids_train, recording_ids_train, block_size
+        )
+        test_dataset = Transformer_VoiceDataset(
+            X_test, y_test, patient_ids_test, recording_ids_test, block_size
+        )
+
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+        # Initialize model and classifier
+        input_dim = features.shape[1]
+        model = Transformer_Decoder(
+            n_features=n_features,
+            n_layer=n_layer,
+            embedding_dim=embedding_dim,
+            num_heads=num_heads,
+            block_size=block_size,
+            dropout=dropout,
+            device=device
+            ).to(device)
+
+        classifier = LinearClassifierHead(
+            embedding_dim=embedding_dim, num_classes=2
+        ).to(device)
+
+        print(f"Model parameters: {model.get_num_parameters():,}")
+
+        # Setup training
+        criterion = nn.CrossEntropyLoss()
+        optimizer = optim.Adam(
+            list(model.parameters()) + list(classifier.parameters()), lr=learning_rate
+        )
+
+        # Training loop
+        best_loss = float("inf")
+        for epoch in range(num_epochs):
+            train_loss = train_epoch_Transformer(
+                model, classifier, train_loader, criterion, optimizer, device
+            )
+
+            if (epoch + 1) % 10 == 0:
+                print(f"Epoch {epoch + 1}/{num_epochs} - Loss: {train_loss:.4f}")
+
+            if train_loss < best_loss:
+                best_loss = train_loss
+
+        # Evaluate on test patient
+        test_embeddings, test_preds, test_labels_array, test_pids, test_rids = evaluate(
+            model, classifier, test_loader, device
+        )
+
+        # Store results
+        all_test_embeddings.append(test_embeddings)
+        all_test_labels.append(test_labels_array)
+        all_test_patient_ids.append(test_pids)
+        all_test_recording_ids.append(test_rids)
+
+        # Compute per-patient AUC for this fold (at recording level)
+        per_patient_auc = compute_per_patient_auc(
+            test_pids, test_labels_array, test_preds, test_rids
+        )
+        all_per_patient_aucs.update(per_patient_auc)
+
+        # Print fold results
+        for pid, auc in per_patient_auc.items():
+            if auc is not None:
+                print(f"\n{test_patient} ROC AUC (recording level): {auc:.4f}")
+
+    # Aggregate results across all folds
+    print(f"\n\n{'#' * 60}")
+    print("FINAL RESULTS - Leave-One-Patient-Out Cross-Validation")
+    print(f"{'#' * 60}")
+
+    mean_auc, std_auc, valid_aucs = aggregate_patient_aucs(all_per_patient_aucs)
+
+    # Compute random baseline
+    print("\nComputing random baseline (Monte Carlo, N=100)...")
+    all_test_recording_ids_array = np.concatenate(all_test_recording_ids)
+    random_mean, random_std, _ = compute_random_baseline(
+        np.concatenate(all_test_patient_ids),
+        np.concatenate(all_test_labels),
+        all_test_recording_ids_array,
+        n_iterations=100,
+    )
+
+    print_evaluation_results(
+        all_per_patient_aucs, mean_auc, std_auc, "LOPO", (random_mean, random_std)
+    )
+
+    # Concatenate all test results for visualization
+    all_test_embeddings = np.vstack(all_test_embeddings)
+    all_test_labels = np.concatenate(all_test_labels)
+    all_test_patient_ids = np.concatenate(all_test_patient_ids)
+    all_test_recording_ids_array = np.concatenate(all_test_recording_ids)
+
+    # Plot embeddings
+    print("Generating embedding visualization...")
+    time = datetime.datetime.now().strftime('%Y_%m_%d-%H_%M')
+
+    plot_embeddings_2d(
+        all_test_embeddings,
+        all_test_labels,
+        all_test_patient_ids,
+        title=f"Learned Embeddings (LOPO) - Mean AUC: {mean_auc:.4f}",
+        save_path=f"experiments/{time}_embeddings_visualization.png",
+    )
+    plt.show()
+
+    return {
+        "per_patient_auc": all_per_patient_aucs,
+        "mean_auc": mean_auc,
+        "std_auc": std_auc,
+        "embeddings": all_test_embeddings,
+        "labels": all_test_labels,
+        "patient_ids": all_test_patient_ids,
+    }
+
+
+
+def train_lopo_MLP(
+    features: np.ndarray,
+    labels: np.ndarray,
+    patient_ids: np.ndarray,
+    recording_ids: np.ndarray,
+    embedding_dim: int = 64,
+    hidden_dims: list = [256, 128],
+    batch_size: int = 128,
+    num_epochs: int = 50,
+    learning_rate: float = 0.001,
+    device: str = "cpu",
+    aggregate_recordings=False
 ):
     """
     Train using Leave-One-Patient-Out cross-validation.
@@ -385,12 +806,14 @@ def train_lopo(
 
     # Plot embeddings
     print("Generating embedding visualization...")
+    time = datetime.datetime.now().strftime('%Y_%m_%d-%H_%M')
+
     plot_embeddings_2d(
         all_test_embeddings,
         all_test_labels,
         all_test_patient_ids,
         title=f"Learned Embeddings (LOPO) - Mean AUC: {mean_auc:.4f}",
-        save_path=f"embeddings_visualization_{current_time}.png"
+        save_path=f"experiments/{time}_embeddings_visualization.png",
     )
     plt.show()
 
@@ -404,37 +827,31 @@ def train_lopo(
     }
 
 
-def main(args):
+def main_MLP():
     """Main training function."""
     # Load configuration from config.py
     config = get_config()
     config.print_config()
-    DEVICE =  "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
+
+    DEVICE = "cuda" if (torch.cuda.is_available() and config.use_cuda) else "cpu"
     print(f"Using device: {DEVICE}")
 
     # Load data
     features, labels, patient_ids, recording_ids, feature_names = load_data(
-        args.data_path
+        config.data_path
     )
 
-    # Get loss function
-    if args.loss == "cross_entropy":
-        criterion = nn.CrossEntropyLoss()
-    elif args.loss == "contrastive":
-        criterion = ConstrativeLoss(margin=1.0)
-
     # Train with LOPO
-    results = train_lopo(
+    results = train_lopo_MLP(
         features=features,
         labels=labels,
         patient_ids=patient_ids,
         recording_ids=recording_ids,
-        embedding_dim=args.embedding_dim,
-        hidden_dims=args.hidden_dims,
-        batch_size=args.batch_size,
-        num_epochs=args.num_epochs,
-        learning_rate=args.learning_rate,
-        criterion=criterion,
+        embedding_dim=config.embedding_dim,
+        hidden_dims=config.hidden_dims,
+        batch_size=config.batch_size,
+        num_epochs=config.num_epochs,
+        learning_rate=config.learning_rate,
         device=DEVICE,
     )
 
@@ -442,28 +859,60 @@ def main(args):
     print(f"Final Mean ROC AUC: {results['mean_auc']:.4f} ± {results['std_auc']:.4f}")
     print("Embedding visualization saved to: embeddings_visualization.png")
 
+    config.save(additionnal_text=f"Results per patient : \t{results["per_patient_auc"]}\nFinal Mean ROC AUC: \t{results['mean_auc']:.4f} ± {results['std_auc']:.4f}")
+
+def main_Transformer():
+    """Main training function."""
+    # Load configuration from config.py
+    config = get_config_Transformer()
+    config.print_config()
+
+    DEVICE = "cuda" if (torch.cuda.is_available() and config.use_cuda) else "cpu"
+    print(f"Using device: {DEVICE}")
+
+    # Load data
+    features, labels, patient_ids, recording_ids, feature_names = load_aggregate_data(
+        config.data_path
+    )
+
+    # Train with LOPO
+    results = train_lopo_Transformer(
+        features=features,
+        labels=labels,
+        patient_ids=patient_ids,
+        recording_ids=recording_ids,
+        n_features=config.n_features,
+        n_layer=config.n_layer,
+        embedding_dim=config.embedding_dim,
+        num_heads=config.num_heads,
+        block_size=config.block_size,
+        batch_size=config.batch_size,
+        num_epochs=config.num_epochs,
+        learning_rate=config.learning_rate,
+        device=DEVICE,
+    )
+
+    print("\nTraining complete!")
+    print(f"Final Mean ROC AUC: {results['mean_auc']:.4f} ± {results['std_auc']:.4f}")
+    print("Embedding visualization saved to: embeddings_visualization.png")
+
+    config.save(additionnal_text=f"Results per patient : \t{results["per_patient_auc"]}\nFinal Mean ROC AUC: \t{results['mean_auc']:.4f} ± {results['std_auc']:.4f}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train voice model with LOPO cross-validation")
-    
-    # Get arguments
-    parser.add_argument("--data_path", type=str, default="data/dataset.parquet",
-                        help="Path to the dataset parquet file")
-    parser.add_argument("--loss", type=str, default="cross_entropy",
-                        choices=["cross_entropy", "contrastive"],
-                        help="Loss function to use for training")
-    parser.add_argument("--embedding_dim", type=int, default=64,
-                        help="Dimension of the learned embeddings")
-    parser.add_argument("--hidden_dims", type=int, nargs='+', default=[256, 128],
-                        help="Hidden layer dimensions for the embedding model")
-    parser.add_argument("--batch_size", type=int, default=128,
-                        help="Batch size for training")
-    parser.add_argument("--num_epochs", type=int, default=50,
-                        help="Number of training epochs per fold")
-    parser.add_argument("--learning_rate", type=float, default=0.001,
-                        help="Learning rate for optimizer")
-    
-    # Parse arguments
-    args = parser.parse_args()
+    main_Transformer()
 
-    main(args)
+    # Add embedding model with contrastive supervised loss
+    # Pour embedder un recording, un attention pooling peut être plus intelligent qu'une simple moyenne
+    # Améliorer l'embedding de la donnée aggrégée en ajoutant plus qu'une simple couche linéaire.
+
+    ###### Taches  ######
+
+    # Hugo : Améliorer l'augmentation des données en séparant les données d'un même jour lors de l'aggrégation, ajouter la variance 
+    # éventuellement ajouter des données avec du dropout. 
+    # Centrer les features du patient par rapport à son ensemble de recordings
+    # Haochen : Pondérer l'attention par l'écart de temps entre le dernier segment et les segments du contexte. 
+    #(Travailler sur le positionnal encoding)
+    # PL : Travailler sur la contrastive loss pour améliorer le transformer embedder. 
+    # Regarder pour prendre en compte l'imbalance des classes.
+    # Regarder s'il est intéressant d'avoir un classifier plus complexe qu'un classifier linéaire après l'embeddeur
+    

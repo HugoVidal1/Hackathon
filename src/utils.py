@@ -351,3 +351,101 @@ def print_evaluation_results(
         print(f"\nImprovement over random: {mean_auc - random_mean:.4f}")
     
     print(f"{'=' * 60}\n")
+
+def load_data(data_path: str):
+    """
+    Load and preprocess the dataset.
+
+    Parameters
+    ----------
+    data_path : str
+        Path to the parquet file.
+
+    Returns
+    -------
+    features : np.ndarray
+        Feature matrix.
+    labels : np.ndarray
+        Binary labels.
+    patient_ids : np.ndarray
+        Patient identifiers.
+    recording_ids : np.ndarray
+        Recording identifiers.
+    feature_names : list
+        List of feature column names.
+    """
+    print(f"Loading data from {data_path}...")
+    df = pd.read_parquet(data_path)
+
+    # Define metadata columns to exclude from features
+    metadata_cols = [
+        "recording_id",
+        "patient_short_id",
+        "label",
+    ]
+
+    # Get feature columns
+    feature_cols = [col for col in df.columns if col not in metadata_cols]
+
+    # Extract features, labels, patient IDs, and recording IDs
+    features = df[feature_cols].values.astype(np.float32)
+    labels = df["label"].values.astype(np.int64)
+    patient_ids = df["patient_short_id"].values
+    recording_ids = df["recording_id"].values
+
+    # Handle missing values
+    features = np.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0)
+
+    print(f"Loaded {len(df)} samples from {len(np.unique(patient_ids))} patients")
+    print(f"Unique recordings: {len(np.unique(recording_ids))}")
+    print(f"Feature dimension: {features.shape[1]}")
+    print(f"Label distribution: {np.bincount(labels)}")
+
+    return features, labels, patient_ids, recording_ids, feature_cols
+
+
+def load_aggregate_data(chunked_dataset_path="data/dataset.parquet"):
+
+    print(f"Loading data from {chunked_dataset_path}...")
+    df = pd.read_parquet(chunked_dataset_path)
+    if 'recording_date' in df.columns:
+        df = df.drop('recording_date', axis=1)
+
+    metadata_cols = ["recording_id", "patient_short_id", "label"]
+    feature_cols = [c for c in df.columns if c not in metadata_cols]
+    rows = []
+
+    for patient_id, df_patient in df.groupby("patient_short_id"):
+        for recording_id, df_recording in df_patient.groupby("recording_id"):
+
+            # Métadonnées (supposées constantes pour un patient au sein d'un même recording)
+            meta = df_recording[metadata_cols].iloc[0]
+
+            # Features
+            mean_feat = df_recording[feature_cols].mean()#.add_suffix("_mean")
+            # var_feat  = df_recording[feature_cols].var()#.add_suffix("_var")
+
+            # Une seule ligne finale
+            row = pd.concat([meta, mean_feat])#, var_feat])
+            rows.append(row)
+
+    df_recordings = pd.DataFrame(rows).reset_index(drop=True)
+
+    # Extract features, labels, patient IDs, and recording IDs
+    features = df_recordings[feature_cols].values.astype(np.float32)
+    labels = df_recordings["label"].values.astype(np.int64)
+    patient_ids = df_recordings["patient_short_id"].values
+    recording_ids = df_recordings["recording_id"].values
+
+    # Handle missing values
+    features = np.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0)
+
+    print(f"Loaded {len(df)} samples from {len(np.unique(patient_ids))} patients")
+    print(f"Unique recordings: {len(np.unique(recording_ids))}")
+    print(f"Feature dimension: {features.shape[1]}")
+    print(f"Label distribution: {np.bincount(labels)}")
+
+    return features, labels, patient_ids, recording_ids, feature_cols
+
+
+
