@@ -446,6 +446,3 @@ def load_aggregate_data(chunked_dataset_path="data/dataset.parquet"):
     print(f"Label distribution: {np.bincount(labels)}")
 
     return features, labels, patient_ids, recording_ids, feature_cols
-
-
-
