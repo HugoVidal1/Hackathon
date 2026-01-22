@@ -249,6 +249,11 @@ def plot_embeddings_2d(
     plt.tight_layout()
 
     if save_path:
+        # Create directory if it doesn't exist
+        import os
+        save_dir = os.path.dirname(save_path)
+        if save_dir and not os.path.exists(save_dir):
+            os.makedirs(save_dir, exist_ok=True)
         plt.savefig(save_path, dpi=300, bbox_inches="tight")
 
     return fig
