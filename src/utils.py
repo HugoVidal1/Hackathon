@@ -244,20 +244,20 @@ def plot_embeddings_2d(
     }
     #{0: "blue", 1: "red"}
     class_marker = {0: 'x', 1: "o"}
-    labels_map = {0: "Stable", 1: "Pre-hospitalization"}
     patient_list = [f'patient_000{i}' for i in range(10)] + [f'patient_00{i}' for i in range(10,14)]
+    labels_map = {patient: {0: "Stable", 1: "Pre-hospitalization"} for patient in patient_list}
 
     for i, patient in enumerate(patient_list):
         mask_patient = patient_ids == patient
         for label in [0, 1]:
             mask_label = labels == label
-            mask = mask_patient == mask_label
+            mask = mask_patient & mask_label
             ax.scatter(
                 embeddings_2d[mask, 0],
                 embeddings_2d[mask, 1],
                 c=patient_colors[i],
                 marker=class_marker[label],
-                label=labels_map[label],
+                label=labels_map[patient][label],
                 alpha=0.6,
                 s=20,
             )
