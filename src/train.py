@@ -10,7 +10,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 import datetime
@@ -293,6 +293,14 @@ def train_lopo_Transformer(
             X_test, y_test, patient_ids_test, recording_ids_test, block_size
         )
 
+        # # Handle class imbalance (DO NOT IMPROVE THE RESULTS)
+        # sample_weights = np.where(
+        #     y_train == 1, 
+        #     len(y_train) / (2 * np.sum(y_train == 1)),
+        #     len(y_train) / (2 * np.sum(y_train == 0))
+        # )
+        # sampler = WeightedRandomSampler(sample_weights, len(y_train), replacement=True)
+        # train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=sampler)
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
         test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
@@ -315,14 +323,24 @@ def train_lopo_Transformer(
         print(f"Model parameters: {model.get_num_parameters():,}")
 
         # Setup training
-        # Handle class imbalance
-        class_weights = torch.tensor(
-            [
-                1.0,  # 1 for class 0
-                (len(y_train) - np.sum(y_train)) / np.sum(y_train)  # Negative/Positive ratio for class 1
-            ], device=device, dtype=torch.float32
-        )
-        criterion = nn.CrossEntropyLoss(weight=class_weights)
+        # # Handle class imbalance (DO NOT IMPROVE THE RESULTS)
+        # class_weights = torch.tensor(
+        #     [
+        #         # # 1 for class 0 and negative/positive ratio for class 1
+        #         # 1.0,  # Class 0
+        #         # (len(y_train) - np.sum(y_train)) / np.sum(y_train)  # Class 1
+
+        #         # # Inverse frequency (normalized)
+        #         # 1.0 / (np.sum(y_train == 0) / len(y_train)),  # Class 0
+        #         # 1.0 / (np.sum(y_train == 1) / len(y_train))  # Class 1
+
+        #         # Square root of inverse frequency (gentler)
+        #         np.sqrt(len(y_train) / (np.sum(y_train == 0) + 1)),  # Class 0
+        #         np.sqrt(len(y_train) / (np.sum(y_train == 1) + 1))  # Class 1
+        #     ], device=device, dtype=torch.float32
+        # )
+        # criterion = nn.CrossEntropyLoss(weight=class_weights)
+        criterion = nn.CrossEntropyLoss()
         optimizer = optim.Adam(
             list(model.parameters()) + list(classifier.parameters()), lr=learning_rate
         )
@@ -499,6 +517,14 @@ def train_lopo_MLP(
             X_test, y_test, patient_ids_test, recording_ids_test
         )
 
+        # # Handle class imbalance (DO NOT IMPROVE THE RESULTS)
+        # sample_weights = np.where(
+        #     y_train == 1, 
+        #     len(y_train) / (2 * np.sum(y_train == 1)),
+        #     len(y_train) / (2 * np.sum(y_train == 0))
+        # )
+        # sampler = WeightedRandomSampler(sample_weights, len(y_train), replacement=True)
+        # train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=sampler)
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
         test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
@@ -515,14 +541,25 @@ def train_lopo_MLP(
         print(f"Model parameters: {model.get_num_parameters():,}")
 
         # Setup training
-        # Handle class imbalance
-        class_weights = torch.tensor(
-            [
-                1.0,  # 1 for class 0
-                (len(y_train) - np.sum(y_train)) / np.sum(y_train)  # Negative/Positive ratio for class 1
-            ], device=device, dtype=torch.float32
-        )
-        criterion = nn.CrossEntropyLoss(weight=class_weights)
+        # Handle class imbalance (DO NOT IMPROVE THE RESULTS)
+        # # Handle class imbalance
+        # class_weights = torch.tensor(
+        #     [
+        #         # # 1 for class 0 and negative/positive ratio for class 1
+        #         # 1.0,  # Class 0
+        #         # (len(y_train) - np.sum(y_train)) / np.sum(y_train)  # Class 1
+
+        #         # # Inverse frequency (normalized)
+        #         # 1.0 / (np.sum(y_train == 0) / len(y_train)),  # Class 0
+        #         # 1.0 / (np.sum(y_train == 1) / len(y_train))  # Class 1
+
+        #         # Square root of inverse frequency (gentler)
+        #         np.sqrt(len(y_train) / (np.sum(y_train == 0) + 1)),  # Class 0
+        #         np.sqrt(len(y_train) / (np.sum(y_train == 1) + 1))  # Class 1
+        #     ], device=device, dtype=torch.float32
+        # )
+        # criterion = nn.CrossEntropyLoss(weight=class_weights)
+        criterion = nn.CrossEntropyLoss()
         optimizer = optim.Adam(
             list(model.parameters()) + list(classifier.parameters()), lr=learning_rate
         )
