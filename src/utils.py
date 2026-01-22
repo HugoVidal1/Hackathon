@@ -226,19 +226,41 @@ def plot_embeddings_2d(
     fig, ax = plt.subplots(figsize=(10, 8))
 
     # Plot each class with different colors
-    colors = {0: "blue", 1: "red"}
+    patient_colors = {
+    0: "#1f77b4",  # blue
+    1: "#ff7f0e",  # orange
+    2: "#2ca02c",  # green
+    3: "#d62728",  # red
+    4: "#9467bd",  # purple
+    5: "#8c564b",  # brown
+    6: "#e377c2",  # pink
+    7: "#7f7f7f",  # gray
+    8: "#bcbd22",  # olive
+    9: "#17becf",  # cyan
+    10: "#aec7e8", # light blue
+    11: "#ffbb78", # light orange
+    12: "#98df8a", # light green
+    13: "#ff9896", # light red
+    }
+    #{0: "blue", 1: "red"}
+    class_marker = {0: 'x', 1: "o"}
     labels_map = {0: "Stable", 1: "Pre-hospitalization"}
+    patient_list = [f'patient_000{i}' for i in range(10)] + [f'patient_00{i}' for i in range(10,14)]
 
-    for label in [0, 1]:
-        mask = labels == label
-        ax.scatter(
-            embeddings_2d[mask, 0],
-            embeddings_2d[mask, 1],
-            c=colors[label],
-            label=labels_map[label],
-            alpha=0.6,
-            s=20,
-        )
+    for i, patient in enumerate(patient_list):
+        mask_patient = patient_ids == patient
+        for label in [0, 1]:
+            mask_label = labels == label
+            mask = mask_patient == mask_label
+            ax.scatter(
+                embeddings_2d[mask, 0],
+                embeddings_2d[mask, 1],
+                c=patient_colors[i],
+                marker=class_marker[label],
+                label=labels_map[label],
+                alpha=0.6,
+                s=20,
+            )
 
     ax.set_xlabel(f"PC1 ({pca.explained_variance_ratio_[0]:.2%} variance)")
     ax.set_ylabel(f"PC2 ({pca.explained_variance_ratio_[1]:.2%} variance)")
@@ -408,30 +430,53 @@ def load_aggregate_data(chunked_dataset_path="data/dataset.parquet"):
 
     print(f"Loading data from {chunked_dataset_path}...")
     df = pd.read_parquet(chunked_dataset_path)
+
     if 'recording_date' in df.columns:
         df = df.drop('recording_date', axis=1)
 
-    metadata_cols = ["recording_id", "patient_short_id", "label"]
+    if "augmentation_dict" in df.columns :
+        metadata_cols = ["recording_id", "patient_short_id", "label", "augmentation_dict"]
+    else :
+        metadata_cols = ["recording_id", "patient_short_id", "label"]
+
     feature_cols = [c for c in df.columns if c not in metadata_cols]
     rows = []
 
     for patient_id, df_patient in df.groupby("patient_short_id"):
+        patient_mean = df_patient[feature_cols].mean()
+        patient_std = df_patient[feature_cols].std().replace(0,1)
+        df_patient[feature_cols] = (df_patient[feature_cols] - patient_mean) / patient_std 
         for recording_id, df_recording in df_patient.groupby("recording_id"):
+            if 'augmentation_dict' in df_recording.columns :
+                for augmentation_id, df_augmentation in df_recording.groupby('augmentation_dict'):
+                    # Métadonnées (supposées constantes pour un patient au sein d'un même recording)
+                    meta = df_augmentation[metadata_cols].iloc[0]
 
-            # Métadonnées (supposées constantes pour un patient au sein d'un même recording)
-            meta = df_recording[metadata_cols].iloc[0]
+                    # Features
 
-            # Features
-            mean_feat = df_recording[feature_cols].mean()#.add_suffix("_mean")
-            # var_feat  = df_recording[feature_cols].var()#.add_suffix("_var")
+                    mean_feat = df_augmentation[feature_cols].mean().add_suffix("_mean")
+                    var_feat  = df_augmentation[feature_cols].std().add_suffix("_std")
 
-            # Une seule ligne finale
-            row = pd.concat([meta, mean_feat])#, var_feat])
-            rows.append(row)
+                    # Une seule ligne finale
 
+                    row = pd.concat([meta, mean_feat, var_feat])
+                    rows.append(row)
+            else :
+                # Métadonnées (supposées constantes pour un patient au sein d'un même recording)
+                meta = df_recording[metadata_cols].iloc[0]
+
+                # Features
+                mean_feat = df_recording[feature_cols].mean()#.add_suffix("_mean")
+                var_feat  = df_recording[feature_cols].var()#.add_suffix("_var")
+
+                # Une seule ligne finale
+                row = pd.concat([meta, mean_feat, var_feat])
+                rows.append(row)
+    
     df_recordings = pd.DataFrame(rows).reset_index(drop=True)
 
     # Extract features, labels, patient IDs, and recording IDs
+    feature_cols = [f"{feature}_mean"for feature in feature_cols] + [f"{feature}_std" for feature in feature_cols]
     features = df_recordings[feature_cols].values.astype(np.float32)
     labels = df_recordings["label"].values.astype(np.int64)
     patient_ids = df_recordings["patient_short_id"].values
@@ -444,6 +489,7 @@ def load_aggregate_data(chunked_dataset_path="data/dataset.parquet"):
     print(f"Unique recordings: {len(np.unique(recording_ids))}")
     print(f"Feature dimension: {features.shape[1]}")
     print(f"Label distribution: {np.bincount(labels)}")
+    print(df_recordings.shape)
 
     return features, labels, patient_ids, recording_ids, feature_cols
 

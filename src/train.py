@@ -27,6 +27,10 @@ from utils import (
 )
 from config import get_config, get_config_Transformer
 
+from sklearn.model_selection import GridSearchCV 
+import itertools
+import copy
+
 
 # Set random seeds for reproducibility
 RANDOM_SEED = 42
@@ -219,6 +223,7 @@ def train_lopo_Transformer(
     num_epochs: int = 50,
     learning_rate: float = 0.001,
     device: str = "cpu",
+    plot=False,
 ):
     """
     Train using Leave-One-Patient-Out cross-validation.
@@ -317,7 +322,7 @@ def train_lopo_Transformer(
         # Setup training
         criterion = nn.CrossEntropyLoss()
         optimizer = optim.Adam(
-            list(model.parameters()) + list(classifier.parameters()), lr=learning_rate
+            list(model.parameters()) + list(classifier.parameters()), lr=learning_rate, weight_decay=1e-1
         )
 
         # Training loop
@@ -385,15 +390,16 @@ def train_lopo_Transformer(
     # Plot embeddings
     print("Generating embedding visualization...")
     time = datetime.datetime.now().strftime('%Y_%m_%d-%H_%M')
-
-    plot_embeddings_2d(
-        all_test_embeddings,
-        all_test_labels,
-        all_test_patient_ids,
-        title=f"Learned Embeddings (LOPO) - Mean AUC: {mean_auc:.4f}",
-        save_path=f"experiments/{time}_embeddings_visualization.png",
-    )
-    plt.show()
+    
+    if plot :
+        plot_embeddings_2d(
+            all_test_embeddings,
+            all_test_labels,
+            all_test_patient_ids,
+            title=f"Learned Embeddings (LOPO) - Mean AUC: {mean_auc:.4f}",
+            save_path=f"experiments/{time}_embeddings_visualization.png",
+        )
+        plt.show()
 
     return {
         "per_patient_auc": all_per_patient_aucs,
@@ -417,7 +423,7 @@ def train_lopo_MLP(
     num_epochs: int = 50,
     learning_rate: float = 0.001,
     device: str = "cpu",
-    aggregate_recordings=False
+    plot=False
 ):
     """
     Train using Leave-One-Patient-Out cross-validation.
@@ -578,15 +584,15 @@ def train_lopo_MLP(
     # Plot embeddings
     print("Generating embedding visualization...")
     time = datetime.datetime.now().strftime('%Y_%m_%d-%H_%M')
-
-    plot_embeddings_2d(
-        all_test_embeddings,
-        all_test_labels,
-        all_test_patient_ids,
-        title=f"Learned Embeddings (LOPO) - Mean AUC: {mean_auc:.4f}",
-        save_path=f"experiments/{time}_embeddings_visualization.png",
-    )
-    plt.show()
+    if plot:
+        plot_embeddings_2d(
+            all_test_embeddings,
+            all_test_labels,
+            all_test_patient_ids,
+            title=f"Learned Embeddings (LOPO) - Mean AUC: {mean_auc:.4f}",
+            save_path=f"experiments/{time}_embeddings_visualization.png",
+        )
+        plt.show()
 
     return {
         "per_patient_auc": all_per_patient_aucs,
@@ -596,6 +602,8 @@ def train_lopo_MLP(
         "labels": all_test_labels,
         "patient_ids": all_test_patient_ids,
     }
+
+
 
 
 def main_MLP():
@@ -624,6 +632,7 @@ def main_MLP():
         num_epochs=config.num_epochs,
         learning_rate=config.learning_rate,
         device=DEVICE,
+        plot=True
     )
 
     print("\nTraining complete!")
@@ -661,6 +670,7 @@ def main_Transformer():
         num_epochs=config.num_epochs,
         learning_rate=config.learning_rate,
         device=DEVICE,
+        plot=True
     )
 
     print("\nTraining complete!")
@@ -668,6 +678,88 @@ def main_Transformer():
     print("Embedding visualization saved to: embeddings_visualization.png")
 
     config.save(additionnal_text=f"Results per patient : \t{results["per_patient_auc"]}\nFinal Mean ROC AUC: \t{results['mean_auc']:.4f} ± {results['std_auc']:.4f}")
+
+def GridSearch_Transformer():
+    """Main training function."""
+    # Load configuration from config.py
+    config = get_config_Transformer()
+    config.print_config()
+
+    DEVICE = "cuda" if (torch.cuda.is_available() and config.use_cuda) else "cpu"
+    print(f"Using device: {DEVICE}")
+
+    # Load data
+    features, labels, patient_ids, recording_ids, feature_names = load_aggregate_data(
+        config.data_path
+    )
+
+
+    params_grid = {
+        "n_features" : [786],
+        "n_layer": [2,3],
+        "embedding_dim": [32],
+        "num_heads": [5, 7, 10],
+        "block_size": [5, 8, 10],
+        "batch_size": [128],
+        "num_epochs": [2],
+        "learning_rate": [1e-2, 1e-3, 1e-4],
+        "dropout": [0.3],
+    }
+
+    all_params = list(itertools.product(*params_grid.values()))
+    param_names = list(params_grid.keys())
+
+    results_grid = []
+
+    for param_values in all_params:
+        params = dict(zip(param_names, param_values))
+
+        print(f"\nTraining with params: {params}")
+
+        results = train_lopo_Transformer(
+            features=features,
+            labels=labels,
+            patient_ids=patient_ids,
+            recording_ids=recording_ids,
+            n_features=params["n_features"],
+            n_layer=params["n_layer"],
+            embedding_dim=params["embedding_dim"],
+            num_heads=params["num_heads"],
+            block_size=params["block_size"],
+            batch_size=params["batch_size"],
+            num_epochs=params["num_epochs"],
+            learning_rate=params["learning_rate"],
+            dropout=params["dropout"],
+            device=DEVICE,
+        )
+
+        results_grid.append({
+            "params": params,
+            "results": results
+        })
+
+    print("\nTraining complete!")
+    print(f"Final Mean ROC AUC: {results['mean_auc']:.4f} ± {results['std_auc']:.4f}")
+    print("Embedding visualization saved to: embeddings_visualization.png")
+    
+    # Extraire les AUC
+    mean_aucs = [entry["results"]["mean_auc"] for entry in results_grid]
+
+    # Trouver le meilleur
+    argmax_auc = np.argmax(mean_aucs)
+    max_auc = mean_aucs[argmax_auc]
+
+    best_params = results_grid[argmax_auc]["params"]
+    best_results = results_grid[argmax_auc]["results"]
+
+    print("\n Training complete!")
+    print(f"Best Mean ROC AUC: {max_auc:.4f} ± {best_results['std_auc']:.4f}")
+    print("Best params:")
+    for k, v in best_params.items():
+        print(f"  {k}: {v}")
+    
+    return best_results, best_params
+
 
 if __name__ == "__main__":
     main_Transformer()
@@ -679,10 +771,10 @@ if __name__ == "__main__":
     ###### Taches  ######
 
     # Hugo : Améliorer l'augmentation des données en séparant les données d'un même jour lors de l'aggrégation, ajouter la variance 
-    # éventuellement ajouter des données avec du dropout. 
+    # éventuellement ajouter des données avec du dropout. Ajouter l'age et le sexe dans le plot final
     # Centrer les features du patient par rapport à son ensemble de recordings
     # Haochen : Pondérer l'attention par l'écart de temps entre le dernier segment et les segments du contexte. 
-    #(Travailler sur le positionnal encoding)
+    # (Travailler sur le positionnal encoding)
     # PL : Travailler sur la contrastive loss pour améliorer le transformer embedder. 
     # Regarder pour prendre en compte l'imbalance des classes.
     # Regarder s'il est intéressant d'avoir un classifier plus complexe qu'un classifier linéaire après l'embeddeur
