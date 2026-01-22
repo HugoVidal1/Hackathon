@@ -6,7 +6,6 @@ uses a forced linear classifier head to ensure rich embeddings are learned.
 """
 
 import numpy as np
-import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -14,7 +13,6 @@ from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 import datetime
-import os
 from models import EmbeddingModel, LinearClassifierHead, Transformer_Decoder
 from utils import (
     compute_per_patient_auc,
@@ -67,9 +65,9 @@ class VoiceDataset(Dataset):
         )
     
 class Transformer_VoiceDataset(Dataset):
-    """PyTorch Dataset for voice recordings."""
+    """PyTorch Dataset for voice recordings with temporal contexts."""
 
-    def __init__(self, features, labels, patient_ids, recording_ids=None, context_size=4):
+    def __init__(self, features, labels, patient_ids, recording_ids=None, context_size=4, times=None):
         """
         Parameters
         ----------
@@ -81,16 +79,29 @@ class Transformer_VoiceDataset(Dataset):
             Patient identifiers of shape (n_samples,).
         recording_ids : np.ndarray, optional
             Recording identifiers of shape (n_samples,).
+        times : np.ndarray, optional
+            Timestamps aligned with features for temporal attention weighting.
         """
-        
         self.features = torch.empty((1, context_size, features.shape[1]))
-        context = torch.zeros((context_size, features.shape[1]))
-        torch_features = torch.FloatTensor(features)
-        for feature in torch_features :
-            context = torch.concatenate((context[1:,:],feature.unsqueeze(0)), dim=0)
-            self.features = torch.concatenate((self.features, context.unsqueeze(0)), dim=0)
+        self.times = torch.empty((1, context_size))
 
-        # self.features = torch.FloatTensor(features)
+        feature_context = torch.zeros((context_size, features.shape[1]))
+        time_context = torch.zeros((context_size,))
+
+        torch_features = torch.FloatTensor(features)
+        torch_times = torch.FloatTensor(times) if times is not None else torch.arange(len(features)).float()
+
+        for feat, t in zip(torch_features, torch_times):
+            feature_context = torch.concatenate((feature_context[1:, :], feat.unsqueeze(0)), dim=0)
+            time_context = torch.concatenate((time_context[1:], t.unsqueeze(0)), dim=0)
+
+            self.features = torch.concatenate((self.features, feature_context.unsqueeze(0)), dim=0)
+            self.times = torch.concatenate((self.times, time_context.unsqueeze(0)), dim=0)
+
+        # Drop the initial padding row
+        self.features = self.features[1:]
+        self.times = self.times[1:]
+
         self.labels = torch.LongTensor(labels)
         self.patient_ids = patient_ids
         self.recording_ids = recording_ids if recording_ids is not None else patient_ids
@@ -104,6 +115,7 @@ class Transformer_VoiceDataset(Dataset):
             self.labels[idx],
             self.patient_ids[idx],
             self.recording_ids[idx],
+            self.times[idx],
         )
 
 def train_epoch(model, classifier, train_loader, criterion, optimizer, device):
@@ -136,12 +148,13 @@ def train_epoch_Transformer(model, classifier, train_loader, criterion, optimize
     classifier.train()
 
     total_loss = 0.0
-    for features, labels, _, _ in train_loader:  # Added recording_id to unpack
+    for features, labels, _, _, time_ctx in train_loader:
         features = features.to(device)
         labels = labels.to(device)
+        time_ctx = time_ctx.to(device)
 
         # Forward pass
-        embeddings = model(features)
+        embeddings = model(features, time_ctx)
         logits = classifier(embeddings)
         loss = criterion(logits, labels)
 
@@ -182,11 +195,20 @@ def evaluate(model, classifier, data_loader, device):
     all_recording_ids = []
 
     with torch.no_grad():
-        for features, labels, patient_ids, recording_ids in data_loader:
+        for batch in data_loader:
+            if len(batch) == 4:
+                features, labels, patient_ids, recording_ids = batch
+                time_ctx = None
+            else:
+                features, labels, patient_ids, recording_ids, time_ctx = batch
             features = features.to(device)
+            time_ctx = time_ctx.to(device) if time_ctx is not None else None
 
             # Get embeddings and predictions
-            embeddings = model(features)
+            if time_ctx is not None:
+                embeddings = model(features, time_ctx)
+            else:
+                embeddings = model(features)
             logits = classifier(embeddings)
             probs = torch.softmax(logits, dim=1)
 
@@ -210,6 +232,7 @@ def train_lopo_Transformer(
     patient_ids: np.ndarray,
     recording_ids: np.ndarray,
     n_features: int,
+    feature_names: list,
     n_layer: int = 3,
     embedding_dim: int = 64,
     num_heads: int = 10,
@@ -219,6 +242,7 @@ def train_lopo_Transformer(
     num_epochs: int = 50,
     learning_rate: float = 0.001,
     device: str = "cpu",
+    time_decay: float = 0.01,
 ):
     """
     Train using Leave-One-Patient-Out cross-validation.
@@ -276,6 +300,25 @@ def train_lopo_Transformer(
         recording_ids_train = recording_ids[train_mask]
         recording_ids_test = recording_ids[test_mask]
 
+        # Use start_time (it could also be end_time) to order sequences and compute temporal gaps
+        time_train = features[train_mask][:, feature_names.index("start_time")]
+        time_test = features[test_mask][:, feature_names.index("start_time")]
+
+        # Ensure numeric times (datetime64 -> int64) then sort so contexts reflect temporal progression
+        time_train = time_train.astype(np.float64)
+        time_test = time_test.astype(np.float64)
+
+        train_order = np.argsort(time_train)
+        test_order = np.argsort(time_test)
+
+        X_train, y_train = X_train[train_order], y_train[train_order]
+        patient_ids_train, recording_ids_train = patient_ids_train[train_order], recording_ids_train[train_order]
+        time_train = time_train[train_order]
+
+        X_test, y_test = X_test[test_order], y_test[test_order]
+        patient_ids_test, recording_ids_test = patient_ids_test[test_order], recording_ids_test[test_order]
+        time_test = time_test[test_order]
+
         print(f"Train samples: {len(X_train)} | Test samples: {len(X_test)}")
         print(f"Train label dist: {np.bincount(y_train)}")
         print(f"Test label dist: {np.bincount(y_test)}")
@@ -287,10 +330,10 @@ def train_lopo_Transformer(
 
         # Create datasets and dataloaders
         train_dataset = Transformer_VoiceDataset(
-            X_train, y_train, patient_ids_train, recording_ids_train, block_size
+            X_train, y_train, patient_ids_train, recording_ids_train, block_size, time_train
         )
         test_dataset = Transformer_VoiceDataset(
-            X_test, y_test, patient_ids_test, recording_ids_test, block_size
+            X_test, y_test, patient_ids_test, recording_ids_test, block_size, time_test
         )
 
         # # Handle class imbalance (DO NOT IMPROVE THE RESULTS)
@@ -313,7 +356,8 @@ def train_lopo_Transformer(
             num_heads=num_heads,
             block_size=block_size,
             dropout=dropout,
-            device=device
+            device=device,
+            time_decay=time_decay,
             ).to(device)
 
         classifier = LinearClassifierHead(
@@ -704,6 +748,7 @@ def main_Transformer():
         patient_ids=patient_ids,
         recording_ids=recording_ids,
         n_features=config.n_features,
+        feature_names=feature_names,
         n_layer=config.n_layer,
         embedding_dim=config.embedding_dim,
         num_heads=config.num_heads,
@@ -712,6 +757,10 @@ def main_Transformer():
         num_epochs=config.num_epochs,
         learning_rate=config.learning_rate,
         device=DEVICE,
+        # time_decay=0.01,
+        # time_decay=0.005,
+        time_decay=0.0001,
+        # time_decay=0.0,
     )
 
     print("\nTraining complete!")

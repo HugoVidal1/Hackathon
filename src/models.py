@@ -9,6 +9,7 @@ patient-specific voice characteristics.
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from typing import Union
 
 
 class EmbeddingModel(nn.Module):
@@ -126,35 +127,51 @@ class LinearClassifierHead(nn.Module):
 
 class MaskedSelfAttentionHead(nn.Module):
 
-    def __init__(self, embedding_dim, head_size, block_size):
+    def __init__(self, embedding_dim, head_size, block_size, time_decay: float = 0.01):
         super().__init__()
         self.key = nn.Linear(embedding_dim, head_size, bias=False)
         self.query = nn.Linear(embedding_dim, head_size, bias=False)
         self.value = nn.Linear(embedding_dim, head_size, bias=False)
         self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
+        self.time_decay = time_decay  # scales how strongly distant timestamps are downweighted
 
-    def forward(self, x):
+    def forward(self, x, time_ctx: Union[torch.Tensor, None] = None):
         B, T, C = x.shape
         # x is B, T, C
         k = self.key(x)   # (B, T, H)
         H = k.shape[-1]
         q = self.query(x) # (B, T, H)
-        # Calcul des scores d'attention (affinités)
+
+        # Raw attention scores
         weights = q @ k.transpose(-2, -1) * H**-0.5  # (B, T, H) @ (B, H, T) -> (B, T, T)
-        weights = weights.masked_fill(self.tril[:T, :T] == 0, float('-inf'))  # (B, T, T)
-        weights = F.softmax(weights, dim=-1) # (B, T, T)
+
+        # Causal mask
+        weights = weights.masked_fill(self.tril[:T, :T] == 0, float('-inf')) # (B, T, T)
+
+        # Temporal decay bias: downweight keys farther in time from the most recent segment
+        if time_ctx is not None:
+            # time_ctx shape: (B, T), use gap to last timestamp in the context
+            gap_to_last = (time_ctx[:, -1].unsqueeze(-1) - time_ctx).clamp(min=0.0)
+            # Broadcast to (B, T, T): same decay applied for every query on each key
+            time_bias = -self.time_decay * gap_to_last.unsqueeze(1)
+            weights = weights + time_bias
+
+        weights = F.softmax(weights, dim=-1)
         v = self.value(x)  # (B, T, H)
-        out = weights @ v # (B, T, T) @ (B, T, H) -> (B, T, H)
+        out = weights @ v  # (B, T, H)
         return out
 
 class MultiHeadAttention(nn.Module):
 
-    def __init__(self, num_heads, embedding_dim, head_size, block_size):
+    def __init__(self, num_heads, embedding_dim, head_size, block_size, time_decay: float = 0.01):
         super().__init__()
-        self.heads = nn.ModuleList([MaskedSelfAttentionHead(embedding_dim, head_size, block_size) for _ in range(num_heads)])
+        self.heads = nn.ModuleList([
+            MaskedSelfAttentionHead(embedding_dim, head_size, block_size, time_decay=time_decay)
+            for _ in range(num_heads)
+        ])
 
-    def forward(self, x):
-        out = torch.cat([h(x) for h in self.heads], dim=-1)
+    def forward(self, x, time_ctx: torch.Tensor | None = None):
+        out = torch.cat([h(x, time_ctx) for h in self.heads], dim=-1)
         return out
 
 # class FeedForward(nn.Module):
@@ -172,16 +189,16 @@ class MultiHeadAttention(nn.Module):
     
 class Block(nn.Module):
 
-    def __init__(self, num_heads, embedding_dim, block_size):
+    def __init__(self, num_heads, embedding_dim, block_size, time_decay: float = 0.01):
         super().__init__()
         head_size = embedding_dim // num_heads
-        self.sa_heads = MultiHeadAttention(num_heads, embedding_dim, head_size, block_size)
+        self.sa_heads = MultiHeadAttention(num_heads, embedding_dim, head_size, block_size, time_decay=time_decay)
         self.ffwd = nn.Sequential(nn.Linear(head_size*num_heads, embedding_dim),
                                   nn.ReLU())
         self.LayerNorm = nn.LayerNorm(head_size*num_heads)
 
-    def forward(self, x):
-        x = self.sa_heads(x)
+    def forward(self, x, time_ctx: torch.Tensor | None = None):
+        x = self.sa_heads(x, time_ctx)
         x = self.LayerNorm(x)
         x = self.ffwd(x)
         return x
@@ -206,11 +223,11 @@ class Transformer_Decoder(nn.Module):
     Processed embeding of the input ready for binary classification
     """
 
-    def __init__(self, n_features, n_layer, embedding_dim, num_heads, block_size, dropout, device):
+    def __init__(self, n_features, n_layer, embedding_dim, num_heads, block_size, dropout, device, time_decay: float = 0.01):
         super().__init__()
         self.embedding = nn.Linear(n_features, embedding_dim)
         self.position_embedding_table = nn.Embedding(block_size, embedding_dim)
-        self.blocks = nn.Sequential(*[Block(num_heads, embedding_dim, block_size) for _ in range(n_layer)])
+        self.blocks = nn.ModuleList([Block(num_heads, embedding_dim, block_size, time_decay=time_decay) for _ in range(n_layer)])
         self.ln_f = nn.LayerNorm(embedding_dim) # LayerNorm ultime
         self.device = device
         self.block_size = block_size
@@ -224,12 +241,15 @@ class Transformer_Decoder(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, x):
+    def forward(self, x, time_ctx: torch.Tensor | None = None):
         B, T = x.shape[0], x.shape[1]
+        if time_ctx is not None:
+            time_ctx = time_ctx.to(x.device)
         emb = self.embedding(x)  # (B, T, C)
         pos_emb = self.position_embedding_table(torch.arange(T, device=self.device))  # (T, C)
         x = emb + pos_emb
-        x = self.blocks(x)
+        for block in self.blocks:
+            x = block(x, time_ctx)
         x = self.ln_f(x)
         pred = x[:,-1,:].squeeze()
         return pred
