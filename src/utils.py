@@ -10,6 +10,102 @@ from sklearn.decomposition import PCA
 from typing import Dict, List, Tuple, Union
 from datetime import datetime
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class FocalLossBinary(nn.Module):
+    def __init__(self, alpha=0.25, gamma=2.0, reduction="mean"):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, logits, targets):
+        """
+        logits:  (B, 2)  -> [neg, pos]
+        targets: (B,)    -> {0,1}
+        """
+
+        if logits.ndim != 2 or logits.size(1) != 2:
+            raise ValueError("Expected logits of shape (B, 2)")
+
+        targets = targets.float()
+
+        # logit binaire effectif
+        logit = logits[:, 1] - logits[:, 0]   # (B,)
+
+        # BCE avec logits
+        bce = F.binary_cross_entropy_with_logits(
+            logit, targets, reduction="none"
+        )
+
+        # probabilité
+        p = torch.sigmoid(logit)
+        pt = targets * p + (1 - targets) * (1 - p)
+
+        focal = self.alpha * (1 - pt) ** self.gamma * bce
+
+        if self.reduction == "mean":
+            return focal.mean()
+        elif self.reduction == "sum":
+            return focal.sum()
+        else:
+            return focal
+
+
+class SupConLoss(torch.nn.Module):
+    def __init__(self, temperature=0.1):
+        super().__init__()
+        self.temperature = temperature
+
+    def forward(self, z, labels):
+        z = F.normalize(z, dim=1)
+        device = z.device
+        N = z.size(0)
+
+        sim = torch.matmul(z, z.T) / self.temperature
+        labels = labels.contiguous().view(-1, 1)
+        mask = torch.eq(labels, labels.T).float().to(device)
+
+        # remove self-comparisons
+        logits_mask = torch.ones_like(mask) - torch.eye(N, device=device)
+        mask = mask * logits_mask
+
+        exp_sim = torch.exp(sim) * logits_mask
+        log_prob = sim - torch.log(exp_sim.sum(dim=1, keepdim=True))
+
+        mean_log_prob_pos = (mask * log_prob).sum(dim=1) / mask.sum(dim=1)
+
+        loss = -mean_log_prob_pos
+        return loss.mean()
+    
+class CenterLoss(nn.Module):
+    def __init__(self, num_classes, emb_dim, device):
+        super().__init__()
+        self.num_classes = num_classes
+        self.emb_dim = emb_dim
+        self.device = device
+
+        self.centers = nn.Parameter(
+            torch.randn(num_classes, emb_dim).to(device)
+        )
+
+    def forward(self, z, labels):
+        """
+        z: (N, D) embeddings
+        labels: (N,) class labels
+        """
+        batch_size = z.size(0)
+
+        centers_batch = self.centers[labels]  # (N, D)
+        loss = ((z - centers_batch) ** 2).sum() / (2.0 * batch_size)
+        return loss
+
 
 def extract_date_from_recording_id(
     recording_id: Union[str, pd.Series],
@@ -226,24 +322,46 @@ def plot_embeddings_2d(
     fig, ax = plt.subplots(figsize=(10, 8))
 
     # Plot each class with different colors
-    colors = {0: "blue", 1: "red"}
-    labels_map = {0: "Stable", 1: "Pre-hospitalization"}
+    patient_colors = {
+    0: "#1f77b4",  # blue
+    1: "#ff7f0e",  # orange
+    2: "#2ca02c",  # green
+    3: "#d62728",  # red
+    4: "#9467bd",  # purple
+    5: "#8c564b",  # brown
+    6: "#e377c2",  # pink
+    7: "#7f7f7f",  # gray
+    8: "#bcbd22",  # olive
+    9: "#17becf",  # cyan
+    10: "#aec7e8", # light blue
+    11: "#ffbb78", # light orange
+    12: "#98df8a", # light green
+    13: "#ff9896", # light red
+    }
+    #{0: "blue", 1: "red"}
+    class_marker = {0: 'x', 1: "o"}
+    patient_list = [f'patient_000{i}' for i in range(10)] + [f'patient_00{i}' for i in range(10,14)]
+    labels_map = {patient: {0: "Stable", 1: "Pre-hospitalization"} for patient in patient_list}
 
-    for label in [0, 1]:
-        mask = labels == label
-        ax.scatter(
-            embeddings_2d[mask, 0],
-            embeddings_2d[mask, 1],
-            c=colors[label],
-            label=labels_map[label],
-            alpha=0.6,
-            s=20,
-        )
+    for i, patient in enumerate(patient_list):
+        mask_patient = patient_ids == patient
+        for label in [0, 1]:
+            mask_label = labels == label
+            mask = mask_patient & mask_label
+            ax.scatter(
+                embeddings_2d[mask, 0],
+                embeddings_2d[mask, 1],
+                c=patient_colors[i],
+                marker=class_marker[label],
+                label=f"{patient} - {labels_map[patient][label]}",
+                alpha=0.6,
+                s=20,
+            )
 
     ax.set_xlabel(f"PC1 ({pca.explained_variance_ratio_[0]:.2%} variance)")
     ax.set_ylabel(f"PC2 ({pca.explained_variance_ratio_[1]:.2%} variance)")
     ax.set_title(title)
-    ax.legend()
+    ax.legend(loc="center left", bbox_to_anchor=(1.05, 0.5))
     ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
@@ -413,30 +531,61 @@ def load_aggregate_data(chunked_dataset_path="data/dataset.parquet"):
 
     print(f"Loading data from {chunked_dataset_path}...")
     df = pd.read_parquet(chunked_dataset_path)
+
     if 'recording_date' in df.columns:
         df = df.drop('recording_date', axis=1)
 
-    metadata_cols = ["recording_id", "patient_short_id", "label"]
+    if "augmentation_dict" in df.columns :
+        metadata_cols = ["recording_id", "patient_short_id", "label", "augmentation_dict", "start_time", "end_time"]
+    else :
+        metadata_cols = ["recording_id", "patient_short_id", "label"]
+
     feature_cols = [c for c in df.columns if c not in metadata_cols]
+    aggregate_feature_cols = [f"{feature}_mean"for feature in feature_cols] + [f"{feature}_std" for feature in feature_cols]
+    n=0
     rows = []
-
     for patient_id, df_patient in df.groupby("patient_short_id"):
+        patient_recordings = []
         for recording_id, df_recording in df_patient.groupby("recording_id"):
+            n+=1
+            if 'augmentation_dict' in df_recording.columns :
+                for augmentation_id, df_augmentation in df_recording.groupby('augmentation_dict'):
+                    # Métadonnées (supposées constantes pour un patient au sein d'un même recording)
+                    meta = df_augmentation[metadata_cols].iloc[0]
+                    # Pour la baseline patient prendre après aggrégation et prendre que mu
+                    # Features
 
-            # Métadonnées (supposées constantes pour un patient au sein d'un même recording)
-            meta = df_recording[metadata_cols].iloc[0]
+                    mean_feat = df_augmentation[feature_cols].mean().add_suffix("_mean")
+                    var_feat  = df_augmentation[feature_cols].std().add_suffix("_std")
 
-            # Features
-            mean_feat = df_recording[feature_cols].mean()#.add_suffix("_mean")
-            # var_feat  = df_recording[feature_cols].var()#.add_suffix("_var")
+                    # Une seule ligne finale
 
-            # Une seule ligne finale
-            row = pd.concat([meta, mean_feat])#, var_feat])
-            rows.append(row)
+                    row = pd.concat([meta, mean_feat, var_feat])
+                    patient_recordings.append(row)
+                    
+            else :
+                # Métadonnées (supposées constantes pour un patient au sein d'un même recording)
+                meta = df_recording[metadata_cols].iloc[0]
 
-    df_recordings = pd.DataFrame(rows).reset_index(drop=True)
+                # Features
+                mean_feat = df_recording[feature_cols].mean()#.add_suffix("_mean")
+                var_feat  = df_recording[feature_cols].std()#.add_suffix("_var")
+
+                # Une seule ligne finale
+                row = pd.concat([meta, mean_feat, var_feat])
+                patient_recordings.append(row)
+
+        df_recording_patient = pd.DataFrame(patient_recordings).reset_index(drop=True)
+        df_patient_features = df_recording_patient[aggregate_feature_cols]
+        df_recording_patient[aggregate_feature_cols] = df_patient_features - df_patient_features.mean()
+        
+        rows.append(df_recording_patient)
+    df_recordings = pd.concat(rows, ignore_index=True)
+
+    # df_recordings = pd.DataFrame(rows).reset_index(drop=True)
 
     # Extract features, labels, patient IDs, and recording IDs
+    feature_cols = [f"{feature}_mean"for feature in feature_cols] + [f"{feature}_std" for feature in feature_cols]
     features = df_recordings[feature_cols].values.astype(np.float32)
     labels = df_recordings["label"].values.astype(np.int64)
     patient_ids = df_recordings["patient_short_id"].values
@@ -449,5 +598,7 @@ def load_aggregate_data(chunked_dataset_path="data/dataset.parquet"):
     print(f"Unique recordings: {len(np.unique(recording_ids))}")
     print(f"Feature dimension: {features.shape[1]}")
     print(f"Label distribution: {np.bincount(labels)}")
+    print(df_recordings.shape)
+    print(n)
 
     return features, labels, patient_ids, recording_ids, feature_cols

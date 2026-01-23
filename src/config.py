@@ -159,13 +159,13 @@ class Config_Transformer(BaseModel):
 
     # Data settings
     data_path: str = Field(
-        default="data/dataset.parquet",#dataset_300_selected_features_20260120_125655.parquet",
+        default="data/dataset_300_selected_features_20260122_105307.parquet",#dataset_300_selected_features_20260120_125655.parquet",
         description="Path to the dataset parquet file"
     )
 
     # Model architecture
     n_features: int = Field(
-        default=786,
+        default=2*298,
         description="Nombre de features dans les données")
     
     n_layer: int = Field(

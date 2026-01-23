@@ -15,6 +15,9 @@ import matplotlib.pyplot as plt
 import datetime
 from models import EmbeddingModel, LinearClassifierHead, Transformer_Decoder
 from utils import (
+    FocalLossBinary,
+    SupConLoss,
+    CenterLoss,
     compute_per_patient_auc,
     aggregate_patient_aucs,
     plot_embeddings_2d,
@@ -24,6 +27,10 @@ from utils import (
     load_aggregate_data
 )
 from config import get_config, get_config_Transformer
+
+from sklearn.model_selection import GridSearchCV 
+import itertools
+import copy
 
 
 # Set random seeds for reproducibility
@@ -117,12 +124,11 @@ class Transformer_VoiceDataset(Dataset):
             self.recording_ids[idx],
             self.times[idx],
         )
-
-def train_epoch(model, classifier, train_loader, criterion, optimizer, device):
+    
+def train_epoch_encoder(model, classifier, train_loader, criterion_classification, criterion_supcon, criterion_center, encoding, optimizer, train_classifier, device):
     """Train for one epoch."""
     model.train()
-    classifier.train()
-
+    a_contrastive, a_centering = encoding[0], encoding[1]
     total_loss = 0.0
     for features, labels, _, _ in train_loader:  # Added recording_id to unpack
         features = features.to(device)
@@ -130,8 +136,12 @@ def train_epoch(model, classifier, train_loader, criterion, optimizer, device):
 
         # Forward pass
         embeddings = model(features)
-        logits = classifier(embeddings)
-        loss = criterion(logits, labels)
+        loss_center = criterion_center(embeddings, labels)
+        loss_contrastive = criterion_supcon(embeddings, labels)
+        loss = a_contrastive*loss_contrastive + a_centering*loss_center
+        if train_classifier :
+            logits = classifier(embeddings)
+            loss += criterion_classification(logits, labels)
 
         # Backward pass
         optimizer.zero_grad()
@@ -142,7 +152,7 @@ def train_epoch(model, classifier, train_loader, criterion, optimizer, device):
 
     return total_loss / len(train_loader.dataset)
 
-def train_epoch_Transformer(model, classifier, train_loader, criterion, optimizer, device):
+def train_epoch(model, classifier, train_loader, criterion, optimizer, device):
     """Train for one epoch."""
     model.train()
     classifier.train()
@@ -226,6 +236,7 @@ def evaluate(model, classifier, data_loader, device):
 
     return embeddings, predictions, labels, patient_ids, recording_ids
 
+
 def train_lopo_Transformer(
     features: np.ndarray,
     labels: np.ndarray,
@@ -242,7 +253,11 @@ def train_lopo_Transformer(
     num_epochs: int = 50,
     learning_rate: float = 0.001,
     device: str = "cpu",
-    time_decay: float = 0.01,
+    plot=False,
+    non_linear_classifier=False,
+    train_encoder=True,
+    encoding=None,
+    train_classifier=False
 ):
     """
     Train using Leave-One-Patient-Out cross-validation.
@@ -359,70 +374,117 @@ def train_lopo_Transformer(
             device=device,
             time_decay=time_decay,
             ).to(device)
-
-        classifier = LinearClassifierHead(
-            embedding_dim=embedding_dim, num_classes=2
-        ).to(device)
+        
+        if non_linear_classifier :
+            classifier = nn.Sequential(
+                            EmbeddingModel(input_dim=embedding_dim,embedding_dim=embedding_dim), 
+                            LinearClassifierHead(
+                                embedding_dim=embedding_dim, num_classes=2
+                                ).to(device)
+                            )
+        else :
+            classifier = LinearClassifierHead(
+                embedding_dim=embedding_dim, num_classes=2
+            ).to(device)
+        
 
         print(f"Model parameters: {model.get_num_parameters():,}")
 
         # Setup training
-        # # Handle class imbalance (DO NOT IMPROVE THE RESULTS)
-        # class_weights = torch.tensor(
-        #     [
-        #         # # 1 for class 0 and negative/positive ratio for class 1
-        #         # 1.0,  # Class 0
-        #         # (len(y_train) - np.sum(y_train)) / np.sum(y_train)  # Class 1
+        if encoding is None :
+            criterion = FocalLossBinary() 
+            if train_encoder :
+                optimizer = optim.Adam(
+                    list(model.parameters()) + list(classifier.parameters()), lr=learning_rate, weight_decay=1e-1
+                )
+            else :
+                optimizer = optim.Adam(
+                    list(classifier.parameters()), lr=learning_rate, weight_decay=1e-1
+                )
 
-        #         # # Inverse frequency (normalized)
-        #         # 1.0 / (np.sum(y_train == 0) / len(y_train)),  # Class 0
-        #         # 1.0 / (np.sum(y_train == 1) / len(y_train))  # Class 1
+            # Training loop
+            best_loss = float("inf")
+            for epoch in range(num_epochs):
+                train_loss = train_epoch(
+                    model, classifier, train_loader, criterion, optimizer, device
+                )
 
-        #         # Square root of inverse frequency (gentler)
-        #         np.sqrt(len(y_train) / (np.sum(y_train == 0) + 1)),  # Class 0
-        #         np.sqrt(len(y_train) / (np.sum(y_train == 1) + 1))  # Class 1
-        #     ], device=device, dtype=torch.float32
-        # )
-        # criterion = nn.CrossEntropyLoss(weight=class_weights)
-        criterion = nn.CrossEntropyLoss()
-        optimizer = optim.Adam(
-            list(model.parameters()) + list(classifier.parameters()), lr=learning_rate
-        )
+                if (epoch + 1) % 10 == 0:
+                    print(f"Epoch {epoch + 1}/{num_epochs} - Loss: {train_loss:.4f}")
 
-        # Training loop
-        best_loss = float("inf")
-        for epoch in range(num_epochs):
-            train_loss = train_epoch_Transformer(
-                model, classifier, train_loader, criterion, optimizer, device
+                if train_loss < best_loss:
+                    best_loss = train_loss
+
+            # Evaluate on test patient
+            test_embeddings, test_preds, test_labels_array, test_pids, test_rids = evaluate(
+                model, classifier, test_loader, device
             )
 
-            if (epoch + 1) % 10 == 0:
-                print(f"Epoch {epoch + 1}/{num_epochs} - Loss: {train_loss:.4f}")
+            # Store results
+            all_test_embeddings.append(test_embeddings)
+            all_test_labels.append(test_labels_array)
+            all_test_patient_ids.append(test_pids)
+            all_test_recording_ids.append(test_rids)
 
-            if train_loss < best_loss:
-                best_loss = train_loss
+            # Compute per-patient AUC for this fold (at recording level)
+            per_patient_auc = compute_per_patient_auc(
+                test_pids, test_labels_array, test_preds, test_rids
+            )
+            all_per_patient_aucs.update(per_patient_auc)
 
-        # Evaluate on test patient
-        test_embeddings, test_preds, test_labels_array, test_pids, test_rids = evaluate(
-            model, classifier, test_loader, device
-        )
+            # Print fold results
+            for pid, auc in per_patient_auc.items():
+                if auc is not None:
+                    print(f"\n{test_patient} ROC AUC (recording level): {auc:.4f}")
+        
+        else :
+            criterion_classification = FocalLossBinary()
+            criterion_supcon = SupConLoss(temperature=0.3) 
+            criterion_center = CenterLoss(2,embedding_dim,device=device)
 
-        # Store results
-        all_test_embeddings.append(test_embeddings)
-        all_test_labels.append(test_labels_array)
-        all_test_patient_ids.append(test_pids)
-        all_test_recording_ids.append(test_rids)
+            if train_classifier :
+                optimizer = optim.Adam(
+                    list(model.parameters()) + list(classifier.parameters()), lr=learning_rate, weight_decay=1e-1
+                )
+            else :
+                optimizer = optim.Adam(
+                    list(model.parameters()), lr=learning_rate, weight_decay=1e-1
+                )
+            # Training loop
+            best_loss = float("inf")
+            for epoch in range(num_epochs):
+                train_loss = train_epoch_encoder(
+                    model, classifier, train_loader, criterion_classification, criterion_supcon, criterion_center, encoding, optimizer, train_classifier, device
+                )
 
-        # Compute per-patient AUC for this fold (at recording level)
-        per_patient_auc = compute_per_patient_auc(
-            test_pids, test_labels_array, test_preds, test_rids
-        )
-        all_per_patient_aucs.update(per_patient_auc)
+                if (epoch + 1) % 10 == 0:
+                    print(f"Epoch {epoch + 1}/{num_epochs} - Loss: {train_loss:.4f}")
 
-        # Print fold results
-        for pid, auc in per_patient_auc.items():
-            if auc is not None:
-                print(f"\n{test_patient} ROC AUC (recording level): {auc:.4f}")
+                if train_loss < best_loss:
+                    best_loss = train_loss
+
+            # Evaluate on test patient
+            test_embeddings, test_preds, test_labels_array, test_pids, test_rids = evaluate(
+                model, classifier, test_loader, device
+            )
+
+            # Store results
+            all_test_embeddings.append(test_embeddings)
+            all_test_labels.append(test_labels_array)
+            all_test_patient_ids.append(test_pids)
+            all_test_recording_ids.append(test_rids)
+
+            # Compute per-patient AUC for this fold (at recording level)
+            per_patient_auc = compute_per_patient_auc(
+                test_pids, test_labels_array, test_preds, test_rids
+            )
+            all_per_patient_aucs.update(per_patient_auc)
+
+            # Print fold results
+            for pid, auc in per_patient_auc.items():
+                if auc is not None:
+                    print(f"\n{test_patient} ROC AUC (recording level): {auc:.4f}")
+
 
     # Aggregate results across all folds
     print(f"\n\n{'#' * 60}")
@@ -454,15 +516,16 @@ def train_lopo_Transformer(
     # Plot embeddings
     print("Generating embedding visualization...")
     time = datetime.datetime.now().strftime('%Y_%m_%d-%H_%M')
-
-    plot_embeddings_2d(
-        all_test_embeddings,
-        all_test_labels,
-        all_test_patient_ids,
-        title=f"Learned Embeddings (LOPO) - Mean AUC: {mean_auc:.4f}",
-        save_path=f"experiments/{time}_embeddings_visualization.png",
-    )
-    plt.show()
+    
+    if plot :
+        plot_embeddings_2d(
+            all_test_embeddings,
+            all_test_labels,
+            all_test_patient_ids,
+            title=f"Learned Embeddings (LOPO) - Mean AUC: {mean_auc:.4f}",
+            save_path=f"experiments/{time}_embeddings_visualization.png",
+        )
+        plt.show()
 
     return {
         "per_patient_auc": all_per_patient_aucs,
@@ -486,7 +549,7 @@ def train_lopo_MLP(
     num_epochs: int = 50,
     learning_rate: float = 0.001,
     device: str = "cpu",
-    aggregate_recordings=False
+    plot=False
 ):
     """
     Train using Leave-One-Patient-Out cross-validation.
@@ -579,8 +642,8 @@ def train_lopo_MLP(
         ).to(device)
 
         classifier = LinearClassifierHead(
-            embedding_dim=embedding_dim, num_classes=2
-        ).to(device)
+                    embedding_dim=embedding_dim, num_classes=2
+                    ).to(device)
 
         print(f"Model parameters: {model.get_num_parameters():,}")
 
@@ -673,15 +736,15 @@ def train_lopo_MLP(
     # Plot embeddings
     print("Generating embedding visualization...")
     time = datetime.datetime.now().strftime('%Y_%m_%d-%H_%M')
-
-    plot_embeddings_2d(
-        all_test_embeddings,
-        all_test_labels,
-        all_test_patient_ids,
-        title=f"Learned Embeddings (LOPO) - Mean AUC: {mean_auc:.4f}",
-        save_path=f"experiments/{time}_embeddings_visualization.png",
-    )
-    plt.show()
+    if plot:
+        plot_embeddings_2d(
+            all_test_embeddings,
+            all_test_labels,
+            all_test_patient_ids,
+            title=f"Learned Embeddings (LOPO) - Mean AUC: {mean_auc:.4f}",
+            save_path=f"experiments/{time}_embeddings_visualization.png",
+        )
+        plt.show()
 
     return {
         "per_patient_auc": all_per_patient_aucs,
@@ -691,6 +754,8 @@ def train_lopo_MLP(
         "labels": all_test_labels,
         "patient_ids": all_test_patient_ids,
     }
+
+
 
 
 def main_MLP():
@@ -719,6 +784,7 @@ def main_MLP():
         num_epochs=config.num_epochs,
         learning_rate=config.learning_rate,
         device=DEVICE,
+        plot=True
     )
 
     print("\nTraining complete!")
@@ -757,17 +823,99 @@ def main_Transformer():
         num_epochs=config.num_epochs,
         learning_rate=config.learning_rate,
         device=DEVICE,
-        # time_decay=0.01,
-        # time_decay=0.005,
-        time_decay=0.0001,
-        # time_decay=0.0,
+        plot=True,
+        non_linear_classifier=False,
+        encoding=[0,0],
+        train_classifier=True,
     )
 
     print("\nTraining complete!")
     print(f"Final Mean ROC AUC: {results['mean_auc']:.4f} ± {results['std_auc']:.4f}")
     print("Embedding visualization saved to: embeddings_visualization.png")
 
-    config.save(additionnal_text=f"Results per patient : \t{results['per_patient_auc']}\nFinal Mean ROC AUC: \t{results['mean_auc']:.4f} ± {results['std_auc']:.4f}")
+    config.save(additionnal_text=f"Results per patient : \t{results["per_patient_auc"]}\nFinal Mean ROC AUC: \t{results['mean_auc']:.4f} ± {results['std_auc']:.4f}")
+
+def GridSearch_Transformer():
+    """Main training function."""
+    # Load configuration from config.py
+    config = get_config_Transformer()
+    config.print_config()
+
+    DEVICE = "cuda" if (torch.cuda.is_available() and config.use_cuda) else "cpu"
+    print(f"Using device: {DEVICE}")
+
+    # Load data
+    features, labels, patient_ids, recording_ids, feature_names = load_aggregate_data(
+        config.data_path
+    )
+
+
+    params_grid = {
+        "n_features" : [600],
+        "n_layer": [3],
+        "embedding_dim": [32],
+        "num_heads": [15],
+        "block_size": [15],
+        "batch_size": [512],
+        "num_epochs": [2],
+        "learning_rate": [1e-2],
+        "dropout": [0.3],
+    }
+
+    all_params = list(itertools.product(*params_grid.values()))
+    param_names = list(params_grid.keys())
+
+    results_grid = []
+
+    for param_values in all_params:
+        params = dict(zip(param_names, param_values))
+
+        print(f"\nTraining with params: {params}")
+
+        results = train_lopo_Transformer(
+            features=features,
+            labels=labels,
+            patient_ids=patient_ids,
+            recording_ids=recording_ids,
+            n_features=params["n_features"],
+            n_layer=params["n_layer"],
+            embedding_dim=params["embedding_dim"],
+            num_heads=params["num_heads"],
+            block_size=params["block_size"],
+            batch_size=params["batch_size"],
+            num_epochs=params["num_epochs"],
+            learning_rate=params["learning_rate"],
+            dropout=params["dropout"],
+            device=DEVICE,
+        )
+
+        results_grid.append({
+            "params": params,
+            "results": results
+        })
+
+    print("\nTraining complete!")
+    print(f"Final Mean ROC AUC: {results['mean_auc']:.4f} ± {results['std_auc']:.4f}")
+    print("Embedding visualization saved to: embeddings_visualization.png")
+    
+    # Extraire les AUC
+    mean_aucs = [entry["results"]["mean_auc"] for entry in results_grid]
+
+    # Trouver le meilleur
+    argmax_auc = np.argmax(mean_aucs)
+    max_auc = mean_aucs[argmax_auc]
+
+    best_params = results_grid[argmax_auc]["params"]
+    best_results = results_grid[argmax_auc]["results"]
+
+    print("\n Training complete!")
+    print(f"Best Mean ROC AUC: {max_auc:.4f} ± {best_results['std_auc']:.4f}")
+    print("Best params:")
+    for k, v in best_params.items():
+        print(f"  {k}: {v}")
+    
+    return best_results, best_params
+
 
 if __name__ == "__main__":
     main_Transformer()
@@ -779,10 +927,10 @@ if __name__ == "__main__":
     ###### Taches  ######
 
     # Hugo : Améliorer l'augmentation des données en séparant les données d'un même jour lors de l'aggrégation, ajouter la variance 
-    # éventuellement ajouter des données avec du dropout. 
+    # éventuellement ajouter des données avec du dropout. Ajouter l'age et le sexe dans le plot final
     # Centrer les features du patient par rapport à son ensemble de recordings
     # Haochen : Pondérer l'attention par l'écart de temps entre le dernier segment et les segments du contexte. 
-    #(Travailler sur le positionnal encoding)
+    # (Travailler sur le positionnal encoding)
     # PL : Travailler sur la contrastive loss pour améliorer le transformer embedder. 
     # Regarder pour prendre en compte l'imbalance des classes.
     # Regarder s'il est intéressant d'avoir un classifier plus complexe qu'un classifier linéaire après l'embeddeur

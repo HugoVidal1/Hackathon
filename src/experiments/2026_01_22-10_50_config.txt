@@ -1,0 +1,6 @@
+
+============================================================
+ CONFIGURATION
+============================================================  data_path: data/dataset_with_aug_dict.parquet  n_features: 786  n_layer: 2  embedding_dim: 32  num_heads: 7  block_size: 4  dropout: 0.3  batch_size: 128  num_epochs: 5  learning_rate: 0.001  weight_decay: 0.1  use_cuda: True  random_seed: 42  save_embeddings: True  plot_embeddings: True  save_model: False  use_class_weights: False  early_stopping: False  patience: 10
+ + Results per patient : 	{np.str_('patient_0000'): np.float64(0.5857142857142857), np.str_('patient_0001'): np.float64(0.5294117647058822), np.str_('patient_0002'): np.float64(0.5027322404371585), np.str_('patient_0003'): np.float64(0.48), np.str_('patient_0004'): np.float64(0.4857142857142857), np.str_('patient_0005'): np.float64(0.6527777777777779), np.str_('patient_0006'): np.float64(0.3500000000000001), np.str_('patient_0007'): np.float64(0.40816326530612246), np.str_('patient_0008'): np.float64(0.3333333333333333), np.str_('patient_0009'): np.float64(0.5952380952380952), np.str_('patient_0010'): np.float64(0.19117647058823528), np.str_('patient_0011'): np.float64(0.5), np.str_('patient_0012'): np.float64(0.4087301587301587), np.str_('patient_0013'): np.float64(0.15000000000000002)}
+Final Mean ROC AUC: 	0.4409 ± 0.1407
