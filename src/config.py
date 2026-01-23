@@ -200,7 +200,7 @@ class Config_Transformer(BaseModel):
         description="Batch size for training",
     )
     num_epochs: int = Field(
-        default=50,
+        default=5,
         gt=0,
         description="Number of training epochs per LOPO fold",
     )

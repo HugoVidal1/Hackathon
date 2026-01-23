@@ -747,7 +747,7 @@ def main_Transformer():
         device=DEVICE,
         plot=True,
         non_linear_classifier=False,
-        encoding=[0.0,0.1],
+        encoding=[0,0],
         train_classifier=True,
     )
 
